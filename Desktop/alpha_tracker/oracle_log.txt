@@ -1,0 +1,880 @@
+import streamlit as st
+import yfinance as yf
+import pandas as pd
+# Removed threading imports: import threading, time, stop_event, session_lock
+import time # Time is still needed for delays
+import os
+import requests
+import numpy as np
+from datetime import datetime, timedelta
+# Import for the Random Forest Model
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import RandomizedSearchCV
+from scipy.stats import randint
+from sklearn.feature_selection import RFECV
+# Import for the LSTM Model (requires 'pip install tensorflow')
+from tensorflow.keras.models import Sequential, load_model
+from tensorflow.keras.layers import LSTM, Dense, Dropout
+from tensorflow.keras.callbacks import EarlyStopping
+from sklearn.preprocessing import MinMaxScaler
+import joblib
+import random
+import sys
+
+# --- STREAMLIT SESSION INITIALIZATION (FIX 1: Critical Session Error) ---
+# This fixes the repeated 'st.session_state has no attribute "current_prices"' error.
+if 'current_prices' not in st.session_state:
+    st.session_state.current_prices = {}
+if 'debug_queue' not in st.session_state:
+    st.session_state.debug_queue = []
+if 'alerted_tickers_yesterday' not in st.session_state:
+    st.session_state.alerted_tickers_yesterday = set()
+# Note: st.session_state.debug_queue is initialized within the log function as well, 
+# but including it here ensures robustness if log is called early.
+
+
+# --- CONFIGURATION & CONSTANTS ---
+try:
+    ALPHA_VANTAGE_KEY = st.secrets["ALPHA_VANTAGE_KEY"]
+    TELEGRAM_BOT_TOKEN = st.secrets["TELEGRAM_BOT_TOKEN"]
+    TELEGRAM_CHAT_ID = st.secrets["TELEGRAM_CHAT_ID"]
+except KeyError as e:
+    # Use st.error instead of st.stop() for robustness if this script is included in a broader project
+    st.error(f"🚨 CONFIG ERROR: Missing key in .streamlit/secrets.toml. Please ensure {e} is present.")
+
+MONITORED_ASSETS = ["AAPL", "TSLA", "NVDA", "MSFT", "GOOGL", "PLTR", "MSTR", "COIN", "ZC=F", "GC=F", "KC=F", "CL=F", "SPY", "DIA", "EURUSD=X", "JPY=X"]
+ASSET_NAMES = {
+    'AAPL': 'Apple', 'TSLA': 'Tesla', 'NVDA': 'NVIDIA', 'MSFT': 'Microsoft', 'GOOGL': 'Alphabet',
+    'PLTR': 'Palantir', 'MSTR': 'MicroStrategy', 'COIN': 'Coinbase', 'ZC=F': 'Corn Futures', 
+    'GC=F': 'Gold Futures', 'KC=F': 'Coffee Futures', 'CL=F': 'Crude Oil', 
+    'SPY': 'S&P 500 ETF', 
+    'DIA': 'Dow Jones ETF', 
+    'EURUSD=X': 'EUR/USD', 'JPY=X': 'USD/JPY'
+}
+BENCHMARK_TICKER = "^GSPC"
+MODEL_DIR = "models"
+LOG_FILE = "oracle_log.txt"
+PERFORMANCE_LOG_FILE = "performance_log.csv" 
+INTERVAL_SECONDS = 300 # 5 minutes
+MIN_API_DELAY_SECONDS = 15
+RETRAIN_THRESHOLD_MAPE = 0.05
+ALL_FEATURES = ['Close', 'Volume', 'RSI', 'MACD_Hist', 'ATR', 'Rolling_Corr_SPY', 'BB_Width', 'Sentiment_Score'] 
+
+# Persistent storage for the current best features and scalers
+# NOTE: These need to be globals since they are shared across runs/sessions
+BEST_FEATURES_DICT = {} 
+SCALER_DICT = {} 
+LSTM_TIMESTEPS = 20 
+MODEL_WEIGHTS = {t: {'rf': 0.5, 'lstm': 0.5} for t in MONITORED_ASSETS}
+
+# Create directories if they don't exist
+os.makedirs(MODEL_DIR, exist_ok=True)
+
+# Initialize performance log if it doesn't exist
+if not os.path.exists(PERFORMANCE_LOG_FILE):
+    pd.DataFrame(columns=['Date', 'Ticker', 'Predicted_Price', 'Actual_Close', 'Abs_Error', 'Perc_Error', 'RF_Pred', 'LSTM_Pred', 'RF_Perc_Error', 'LSTM_Perc_Error']).to_csv(PERFORMANCE_LOG_FILE, index=False)
+
+
+# --- HELPER FUNCTIONS ---
+
+def log(message):
+    """Simple logging function."""
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with open(LOG_FILE, "a", encoding='utf-8') as f:
+        f.write(f"[{timestamp}] {message}\n")
+    if 'debug_queue' not in st.session_state:
+        st.session_state.debug_queue = []
+    st.session_state.debug_queue.append(f"[{timestamp}] {message}")
+
+def send_telegram(message, silent=False):
+    """Sends a message to the Telegram chat."""
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown", "disable_notification": silent}
+    try:
+        requests.post(url, json=payload)
+    except requests.exceptions.RequestException as e:
+        log(f"Telegram failed for {message[:20]}... Error: {e}")
+
+# Robust YFinance Data Fetching with Retries
+@st.cache_data(ttl=timedelta(days=1))
+def yf_download_robust(ticker, period="2y", interval="1d", max_retries=3):
+    """Handles transient network errors and rate limits for yfinance."""
+    for attempt in range(max_retries):
+        try:
+            time.sleep(1) # Standard delay
+            df = yf.download(ticker, period=period, interval=interval, progress=False, auto_adjust=True)
+            if not df.empty:
+                return df
+            else:
+                log(f"YF failed to return data for {ticker} on attempt {attempt+1}.")
+        except Exception as e:
+            if "ConnectionResetError" in str(e) or "Timeout" in str(e) or "404 Client Error" in str(e):
+                wait_time = (2 ** attempt) + random.uniform(0, 1)
+                log(f"Transient error for {ticker}: {e}. Retrying in {wait_time:.1f}s...")
+                time.sleep(wait_time)
+            else:
+                log(f"Critical YF error for {ticker}. Aborting retries. Error: {e}")
+                break
+    log(f"Failed to download data for {ticker} after {max_retries} attempts.")
+    return pd.DataFrame()
+
+@st.cache_data(ttl=timedelta(days=1))
+def get_benchmark_data(ticker="^GSPC", period="2y"):
+    df = yf_download_robust(ticker, period=period)
+    return df[['Close']].rename(columns={'Close': f'{ticker}_Close'}) if not df.empty else pd.DataFrame()
+
+def get_today_open_price(ticker):
+    try:
+        data = yf.Ticker(ticker).history(period='1d', interval='1m', prepost=True)
+        if len(data) > 0:
+            return data['Open'].iloc[0]
+        return None
+    except Exception as e:
+        log(f"Failed to get opening price for {ticker}: {e}")
+        return None
+
+def get_current_price(ticker):
+    try:
+        ticker_obj = yf.Ticker(ticker)
+        data = ticker_obj.history(period='1d', interval='1m')
+        if len(data) > 0:
+            current_price = data['Close'].iloc[-1]
+            st.session_state.current_prices[ticker] = current_price # Update session state here
+            return current_price
+        return None
+    except Exception as e:
+        log(f"Error fetching current price for {ticker}: {e}")
+        return None
+        
+def calculate_atr(df, window=14):
+    df['H-L'] = df['High'] - df['Low']
+    df['H-PC'] = abs(df['High'] - df['Close'].shift(1))
+    df['L-PC'] = abs(df['Low'] - df['Close'].shift(1))
+    df['TR'] = df[['H-L', 'H-PC', 'L-PC']].max(axis=1)
+    df['ATR'] = df['TR'].ewm(span=window, adjust=False, min_periods=window).mean()
+    df.drop(columns=['H-L', 'H-PC', 'L-PC', 'TR'], inplace=True)
+    return df
+
+def calculate_bb_width(df, window=20, num_std=2):
+    df['Middle_Band'] = df['Close'].rolling(window=window).mean()
+    df['Std_Dev'] = df['Close'].rolling(window=window).std()
+    df['Upper_Band'] = df['Middle_Band'] + (df['Std_Dev'] * num_std)
+    df['Lower_Band'] = df['Middle_Band'] - (df['Std_Dev'] * num_std)
+    df['BB_Width'] = (df['Upper_Band'] - df['Lower_Band']) / df['Middle_Band']
+    df.drop(columns=['Middle_Band', 'Std_Dev', 'Upper_Band', 'Lower_Band'], inplace=True)
+    return df
+
+@st.cache_data(ttl=timedelta(days=7))
+def fetch_historical_sentiment(ticker, days=730):
+    # This is a placeholder for historical sentiment and is filled with 0.0
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=days)
+    return pd.Series(0.0, index=pd.date_range(start=start_date, end=end_date, freq='D'), name='Sentiment_Score')
+
+
+def add_technicals(df, benchmark_df, ticker):
+    # RSI
+    delta = df['Close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    RS = gain / loss
+    df['RSI'] = 100 - (100 / (1 + RS))
+    # MACD
+    exp1 = df['Close'].ewm(span=12, adjust=False).mean()
+    exp2 = df['Close'].ewm(span=26, adjust=False).mean()
+    macd = exp1 - exp2
+    signal = macd.ewm(span=9, adjust=False).mean()
+    df['MACD_Hist'] = macd - signal
+
+    df = calculate_atr(df, window=14)
+    df = calculate_bb_width(df, window=20, num_std=2)
+    
+    # Rolling Correlation
+    if not benchmark_df.empty:
+        df = df.join(benchmark_df, how='left')
+        df['Asset_Return'] = df['Close'].pct_change()
+        df['Benchmark_Return'] = df[f'{BENCHMARK_TICKER}_Close'].pct_change()
+        df['Rolling_Corr_SPY'] = df['Asset_Return'].rolling(window=10).corr(df['Benchmark_Return'])
+        df.drop(columns=[f'{BENCHMARK_TICKER}_Close', 'Asset_Return', 'Benchmark_Return'], errors='ignore', inplace=True)
+    else:
+        df['Rolling_Corr_SPY'] = 0.0
+        
+    # Historical Sentiment (Placeholder)
+    sentiment_series = fetch_historical_sentiment(ticker, days=730)
+    sentiment_series.index = pd.to_datetime(sentiment_series.index).normalize()
+    df = df.join(sentiment_series, how='left')
+    df['Sentiment_Score'] = df['Sentiment_Score'].fillna(0)
+
+    return df.dropna()
+
+def get_av_sentiment():
+    url = "https://www.alphavantage.co/query"
+    params = {"function": "NEWS_SENTIMENT", "tickers": ",".join(MONITORED_ASSETS), "apikey": ALPHA_VANTAGE_KEY}
+    
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            time.sleep(1) 
+            response = requests.get(url, params=params)
+            if response.status_code == 429 or "rate limit" in response.text.lower():
+                wait_time = (2 ** attempt) + random.uniform(0, 1)
+                log(f"Alpha Vantage Rate Limit hit. Retrying in {wait_time:.1f}s...")
+                time.sleep(wait_time)
+                continue
+            response.raise_for_status()
+            data = response.json()
+            return data.get('feed', [])
+        except requests.exceptions.RequestException as e:
+            wait_time = (2 ** attempt) + random.uniform(0, 1)
+            log(f"Alpha Vantage API failed. Error: {e}. Retrying in {wait_time:.1f}s...")
+            time.sleep(wait_time)
+        except Exception as e:
+            log(f"Unexpected error in AV sentiment fetch: {e}")
+            break
+            
+    log("Failed to fetch Alpha Vantage sentiment after multiple retries.")
+    return []
+
+def prepare_lstm_data(df, optimal_features, scaler=None, timesteps=LSTM_TIMESTEPS):
+    data = df[optimal_features].values
+    
+    # Use existing scaler if provided, otherwise fit a new one
+    if scaler is None:
+        scaler = MinMaxScaler(feature_range=(0, 1))
+        scaled_data = scaler.fit_transform(data)
+    else:
+        scaled_data = scaler.transform(data)
+    
+    X, y = [], []
+    close_idx = optimal_features.index('Close')
+    
+    # We only need to prepare the last sequence for prediction if it's the full df
+    if len(df) <= timesteps:
+        return np.array([]), np.array([]), scaler
+
+    # Prepare historical training data
+    for i in range(timesteps, len(scaled_data)):
+        X.append(scaled_data[i-timesteps:i, :])
+        y.append(scaled_data[i, close_idx]) 
+    
+    return np.array(X), np.array(y), scaler
+
+def train_lstm_model(ticker, X_train, y_train, feature_count):
+    log(f"Building and training LSTM model for {ticker}...")
+    
+    model = Sequential([
+        LSTM(units=50, return_sequences=True, input_shape=(X_train.shape[1], feature_count)),
+        Dropout(0.2),
+        LSTM(units=50, return_sequences=False),
+        Dropout(0.2),
+        Dense(units=1) 
+    ])
+    
+    model.compile(optimizer='adam', loss='mean_squared_error')
+    es = EarlyStopping(monitor='loss', patience=10, restore_best_weights=True)
+    
+    try:
+        model.fit(X_train, y_train, epochs=30, batch_size=32, callbacks=[es], verbose=0)
+        log(f"LSTM training complete for {ticker}.")
+        return model
+    except Exception as e:
+        log(f"LSTM training FAILED for {ticker}. Error: {e}")
+        return None
+
+def select_features(ticker, X_data, y_data, feature_names):
+    estimator = RandomForestRegressor(n_estimators=100, random_state=42)
+    
+    try:
+        rfecv = RFECV(estimator=estimator, step=1, cv=3, scoring='neg_mean_absolute_error', n_jobs=-1)
+        rfecv.fit(X_data, y_data.ravel())
+        
+        selected_features = [feature_names[i] for i, support in enumerate(rfecv.support_) if support]
+        return selected_features, rfecv.best_score_
+    except Exception as e:
+        log(f"Feature selection failed for {ticker}. Using all features. Error: {e}")
+        return ALL_FEATURES, -100.0
+
+
+def tune_hyperparameters(ticker, X_train, y_train):
+    param_dist = {
+        'n_estimators': randint(100, 500),
+        'max_depth': [10, 20, 30, None],
+        'min_samples_split': randint(2, 10),
+        'min_samples_leaf': randint(1, 5),
+        'max_features': ['sqrt', 'log2', 1.0]
+    }
+    rf = RandomForestRegressor(random_state=42)
+    try:
+        random_search = RandomizedSearchCV(
+            estimator=rf, param_distributions=param_dist, n_iter=20, cv=3, verbose=0, random_state=42, n_jobs=-1,
+            scoring='neg_mean_absolute_error'
+        )
+        random_search.fit(X_train, y_train.ravel())
+        return random_search.best_estimator_
+    except Exception as e:
+        log(f"Hyperparameter tuning failed for {ticker}. Using default RF. Error: {e}")
+        rf.fit(X_train, y_train.ravel())
+        return rf
+
+
+# --- ACCURACY & LOGGING ---
+
+def log_performance(predictions_df):
+    """Logs the model's predictions for later accuracy tracking, including RF and LSTM individual predictions."""
+    if predictions_df.empty: return
+    log_data = []
+    current_date = datetime.now().strftime("%Y-%m-%d")
+
+    for t in predictions_df.index:
+        pred_data = predictions_df.loc[t]
+        predicted_price = pred_data.get('Predicted_Price')
+        rf_pred = pred_data.get('RF_Pred')
+        lstm_pred = pred_data.get('LSTM_Pred')
+        
+        if predicted_price is not None and not pd.isna(predicted_price):
+            log_data.append({
+                'Date': current_date,
+                'Ticker': t,
+                'Predicted_Price': predicted_price,
+                'Actual_Close': None, 
+                'Abs_Error': None,
+                'Perc_Error': None,
+                'RF_Pred': rf_pred, 
+                'LSTM_Pred': lstm_pred,
+                'RF_Perc_Error': None, # Added columns for error tracking
+                'LSTM_Perc_Error': None
+            })
+
+    if log_data:
+        new_df = pd.DataFrame(log_data)
+        
+        # Check if the log file exists and if the columns match the expected structure
+        if os.path.exists(PERFORMANCE_LOG_FILE):
+            try:
+                existing_df = pd.read_csv(PERFORMANCE_LOG_FILE)
+                expected_cols_init = ['Date', 'Ticker', 'Predicted_Price', 'Actual_Close', 'Abs_Error', 'Perc_Error', 'RF_Pred', 'LSTM_Pred', 'RF_Perc_Error', 'LSTM_Perc_Error']
+                
+                if not all(col in existing_df.columns.tolist() for col in expected_cols_init):
+                    log(f"Performance log column mismatch. Deleting old log and recreating.")
+                    os.remove(PERFORMANCE_LOG_FILE)
+                    pd.DataFrame(columns=expected_cols_init).to_csv(PERFORMANCE_LOG_FILE, index=False)
+            except pd.errors.EmptyDataError:
+                expected_cols_init = ['Date', 'Ticker', 'Predicted_Price', 'Actual_Close', 'Abs_Error', 'Perc_Error', 'RF_Pred', 'LSTM_Pred', 'RF_Perc_Error', 'LSTM_Perc_Error']
+                pd.DataFrame(columns=expected_cols_init).to_csv(PERFORMANCE_LOG_FILE, index=False)
+            except Exception as e:
+                log(f"Error checking performance log: {e}")
+                
+        # Ensure new_df has all columns defined in init for successful append
+        expected_cols = ['Date', 'Ticker', 'Predicted_Price', 'Actual_Close', 'Abs_Error', 'Perc_Error', 'RF_Pred', 'LSTM_Pred', 'RF_Perc_Error', 'LSTM_Perc_Error']
+        new_df = new_df.reindex(columns=expected_cols, fill_value=None)
+        new_df.to_csv(PERFORMANCE_LOG_FILE, mode='a', header=False, index=False)
+        log(f"Logged {len(log_data)} ensemble predictions, including RF/LSTM components.")
+
+def update_actuals(date_str):
+    """Fetches actual close prices and calculates error metrics, including for RF and LSTM."""
+    try:
+        df = pd.read_csv(PERFORMANCE_LOG_FILE)
+    except Exception:
+        log("Performance log file not found or empty.")
+        return 0
+
+    records_to_update = df[(df['Date'] == date_str) & (df['Actual_Close'].isna())].copy()
+
+    if records_to_update.empty:
+        return 0 
+
+    update_count = 0
+    
+    for ticker in records_to_update['Ticker'].unique():
+        time.sleep(1) 
+        try:
+            actual_data = yf_download_robust(ticker, period='2d')
+            
+            target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+            
+            # Find the actual close price for the target date
+            actual_close = None
+            if not actual_data.empty:
+                # Find matching rows by normalizing index date
+                matching_rows = (actual_data.index.normalize().date == target_date)
+                if matching_rows.any():
+                    # Get the close price from the matching date
+                    # Note: We use the last row matching the date to handle multiple intraday entries if applicable, 
+                    # but since yf_download_robust is called with interval="1d", there should be only one row per date.
+                    actual_close = actual_data.loc[matching_rows, 'Close'].iloc[-1] 
+
+            if actual_close is None:
+                log(f"Could not find actual close for {ticker} on {date_str}.")
+                continue
+            
+            mask = (df['Date'] == date_str) & (df['Ticker'] == ticker) & (df['Actual_Close'].isna())
+            
+            df.loc[mask, 'Actual_Close'] = actual_close
+            
+            # Calculate Ensemble Error
+            df.loc[mask, 'Abs_Error'] = abs(df.loc[mask, 'Predicted_Price'] - actual_close)
+            df.loc[mask, 'Perc_Error'] = df.loc[mask, 'Abs_Error'] / actual_close
+            
+            # Calculate RF Error
+            df.loc[mask, 'RF_Perc_Error'] = abs(df.loc[mask, 'RF_Pred'] - actual_close) / actual_close
+            
+            # Calculate LSTM Error
+            df.loc[mask, 'LSTM_Perc_Error'] = abs(df.loc[mask, 'LSTM_Pred'] - actual_close) / actual_close
+            
+            update_count += 1
+            
+        except Exception as e:
+            log(f"Failed to process actual close for {ticker} on {date_str}: {e}")
+
+    df.to_csv(PERFORMANCE_LOG_FILE, index=False)
+    log(f"Updated {update_count} assets' actuals and calculated errors for Ensemble, RF, and LSTM.")
+    return update_count
+
+def calculate_rolling_accuracy():
+    """Calculates the rolling Mean Absolute Percentage Error (MAPE)."""
+    try:
+        df = pd.read_csv(PERFORMANCE_LOG_FILE)
+    except Exception:
+        return None, "Log file error"
+
+    df_valid = df.dropna(subset=['Predicted_Price', 'Actual_Close']).copy()
+    
+    if df_valid.empty:
+        return None, "No completed prediction data available."
+
+    df_valid['Date'] = pd.to_datetime(df_valid['Date'])
+    last_30_days = datetime.now() - timedelta(days=30)
+    df_rolling = df_valid[df_valid['Date'] >= last_30_days]
+
+    if df_rolling.empty:
+        return None, "Not enough data in the last 30 days."
+
+    mape = df_rolling['Perc_Error'].mean()
+    
+    return mape, None
+
+def get_model_weights(ticker):
+    """
+    Calculates dynamic weights for RF and LSTM based on their recent MAPE (Reciprocal-MAPE).
+    """
+    global MODEL_WEIGHTS
+    
+    rf_weight = 0.5
+    lstm_weight = 0.5
+    
+    try:
+        df = pd.read_csv(PERFORMANCE_LOG_FILE)
+        # Ensure columns exist before filtering
+        if 'RF_Perc_Error' in df.columns and 'LSTM_Perc_Error' in df.columns:
+            df_ticker = df[(df['Ticker'] == ticker)].dropna(subset=['RF_Perc_Error', 'LSTM_Perc_Error']).copy()
+            
+            if len(df_ticker) >= 5: 
+                df_ticker['Date'] = pd.to_datetime(df_ticker['Date'])
+                last_30_days = datetime.now() - timedelta(days=30)
+                df_rolling = df_ticker[df_ticker['Date'] >= last_30_days]
+                
+                if len(df_rolling) >= 5:
+                    rf_mape = df_rolling['RF_Perc_Error'].mean()
+                    lstm_mape = df_rolling['LSTM_Perc_Error'].mean()
+                    
+                    epsilon = 1e-4 
+                    rf_reciprocal = 1.0 / (rf_mape + epsilon)
+                    lstm_reciprocal = 1.0 / (lstm_mape + epsilon)
+                    
+                    total_reciprocal = rf_reciprocal + lstm_reciprocal
+                    
+                    rf_weight = rf_reciprocal / total_reciprocal
+                    lstm_weight = lstm_reciprocal / total_reciprocal
+                    
+    except Exception as e:
+        # FIX 2: Corrected the hardcoded error message to log the actual exception.
+        log(f"Error calculating dynamic weights for {ticker}. Using 0.5/0.5 default. Actual Error: {e}")
+        
+    MODEL_WEIGHTS[ticker] = {'rf': rf_weight, 'lstm': lstm_weight}
+    return rf_weight, lstm_weight
+
+def retrain_all_models(mape):
+    """Triggers a full model retraining for all assets."""
+    global BEST_FEATURES_DICT, SCALER_DICT, MODEL_WEIGHTS
+    log(f"ALERT: MAPE ({mape:.2%}) is above threshold ({RETRAIN_THRESHOLD_MAPE:.2%}). Initiating full model retraining.")
+    
+    for t in MONITORED_ASSETS:
+        rf_path = f"{MODEL_DIR}/{t}_rf_model.pkl"
+        lstm_path = f"{MODEL_DIR}/{t}_lstm_model.h5"
+        if os.path.exists(rf_path): os.remove(rf_path)
+        if os.path.exists(lstm_path): os.remove(lstm_path)
+            
+    BEST_FEATURES_DICT = {}
+    SCALER_DICT = {} 
+    MODEL_WEIGHTS = {t: {'rf': 0.5, 'lstm': 0.5} for t in MONITORED_ASSETS} 
+    
+    log("All existing models deleted. Models will be rebuilt (RF and LSTM with auto-tuning/features) on the next cycle.")
+    send_telegram(f"⚠️ **MODEL RETRAIN ALERT** ⚠️\nRolling MAPE reached {mape:.2%}. All models deleted and will be automatically rebuilt with **optimal features** and **hyperparameter-tuned** during the next cycle for improved accuracy.")
+
+
+def send_daily_status_report(yesterday_date_str):
+    """
+    Generates and sends a Telegram report summarizing the previous day's Oracle activity.
+    """
+    
+    try:
+        df = pd.read_csv(PERFORMANCE_LOG_FILE)
+        df_yesterday = df[(df['Date'] == yesterday_date_str) & (df['Actual_Close'].notna())].copy()
+    except Exception:
+        log("Failed to load performance log for status report.")
+        return
+
+    num_updates = len(df_yesterday['Ticker'].unique())
+    
+    if df_yesterday.empty:
+        status_msg = f"**📊 Alpha Tracker AI Daily Report - {yesterday_date_str} 📊**\n\nNo actual close data was processed for yesterday. Market might have been closed or data not yet available."
+    else:
+        yesterday_mape = df_yesterday['Perc_Error'].mean()
+        
+        df_yesterday['Model_Accuracy'] = 1 - df_yesterday['Perc_Error']
+        
+        # Sort by best accuracy (lowest error)
+        top_3_accurate = df_yesterday.sort_values(by='Perc_Error', ascending=True).head(3)
+        # Sort by worst accuracy (highest error)
+        top_3_inaccurate = df_yesterday.sort_values(by='Perc_Error', ascending=False).head(3)
+        
+        report_date = datetime.strptime(yesterday_date_str, "%Y-%m-%d").strftime("%A, %B %d")
+        
+        report = [
+            f"**📊 Alpha Tracker AI Daily Report - {report_date} 📊**",
+            "---",
+            f"**Update Status:** Processed actual close prices for **{num_updates}** assets.",
+            f"**Yesterday's MAPE (Ensemble):** **{yesterday_mape:.2%}**",
+        ]
+        
+        mape_color = "🟢" if yesterday_mape < RETRAIN_THRESHOLD_MAPE else "🔴"
+        report.append(f"**Retraining Threshold:** {mape_color} Below {RETRAIN_THRESHOLD_MAPE:.2%}")
+        
+        # --- Top Accurate ---
+        report.append("\n**🏆 Top 3 Most Accurate Predictions:**")
+        for i, row in top_3_accurate.iterrows():
+            report.append(f"- {row['Ticker']}: Error {row['Perc_Error']:.2%} (Actual ${row['Actual_Close']:.2f}, Pred ${row['Predicted_Price']:.2f})")
+            
+        # --- Top Inaccurate ---
+        report.append("\n**📉 Top 3 Least Accurate Predictions:**")
+        for i, row in top_3_inaccurate.iterrows():
+            report.append(f"- {row['Ticker']}: Error {row['Perc_Error']:.2%} (Actual ${row['Actual_Close']:.2f}, Pred ${row['Predicted_Price']:.2f})")
+            
+        # --- Alert Summary ---
+        num_alerts = len(st.session_state.get('alerted_tickers_yesterday', set()))
+        alert_list = ", ".join(st.session_state.get('alerted_tickers_yesterday', set())) if num_alerts > 0 else "None"
+        report.append(f"\n**🚨 Predictive Alerts Sent:** {num_alerts} (Assets: {alert_list})")
+        
+        status_msg = "\n".join(report)
+
+    send_telegram(status_msg, silent=True) 
+    log("Daily status report sent to Telegram.")
+    
+    st.session_state.alerted_tickers_yesterday = set() 
+
+# --- CORE ENSEMBLE PREDICTION LOGIC ---
+
+def predict_with_ensemble(tickers):
+    """
+    Core prediction function implementing model management and dynamic ensemble.
+    """
+    global BEST_FEATURES_DICT, SCALER_DICT, MODEL_WEIGHTS
+    results = []
+    
+    news_feed = get_av_sentiment()
+    sentiment_dict = {}
+    for item in news_feed:
+        for t in tickers:
+            for sentiment_data in item.get('ticker_sentiment', []):
+                if sentiment_data.get('ticker') == t:
+                    score = float(sentiment_data.get('ticker_sentiment_score', 0))
+                    relevance = float(sentiment_data.get('relevance_score', 0))
+                    if relevance > 0.3:
+                        # Aggregate sentiment score * relevance
+                        sentiment_dict[t] = sentiment_dict.get(t, 0) + score * relevance
+    
+    benchmark_df = get_benchmark_data(period="2y")
+    
+    if not BEST_FEATURES_DICT:
+        for t in tickers:
+            BEST_FEATURES_DICT[t] = ALL_FEATURES
+
+    for t in tickers:
+        get_model_weights(t)
+
+    for t in tickers:
+        
+        try:
+            time.sleep(MIN_API_DELAY_SECONDS / len(tickers)) 
+            
+            df = yf_download_robust(t, period="2y")
+            
+            if df.empty or len(df) < 50: 
+                results.append({'Ticker': t, 'Next_Close': 'N/A', 'Conf': 0.0, 'Predicted_Price': None, 'Predicted_High': None, 'Predicted_Low': None, 'Features': 'N/A', 'RF_Pred': None, 'LSTM_Pred': None, 'Model_Used': 'N/A', 'RF_Weight': 0.5, 'LSTM_Weight': 0.5})
+                continue
+                
+            df = add_technicals(df, benchmark_df, t) 
+                
+            # --- Prepare Training Data (RF and LSTM share the same feature set) ---
+            y_train_rf = df['Close'].shift(-1).values[:-1]
+            rf_path = f"{MODEL_DIR}/{t}_rf_model.pkl"
+            lstm_path = f"{MODEL_DIR}/{t}_lstm_model.h5"
+            optimal_features = BEST_FEATURES_DICT.get(t, ALL_FEATURES)
+            rf_model, lstm_model = None, None
+            
+            # 1. RF Model Training/Loading
+            if not os.path.exists(rf_path):
+                X_full = df[ALL_FEATURES].values[:-1]
+                if X_full.shape[0] > len(ALL_FEATURES): 
+                    optimal_features, _ = select_features(t, X_full, y_train_rf, ALL_FEATURES)
+                else:
+                    log(f"Not enough data for RFECV for {t}. Using all features.")
+                    optimal_features = ALL_FEATURES
+
+                BEST_FEATURES_DICT[t] = optimal_features
+                X_train_rf = df[optimal_features].values[:-1]
+                rf_model = tune_hyperparameters(t, X_train_rf, y_train_rf) 
+                joblib.dump(rf_model, rf_path)
+            else:
+                rf_model = joblib.load(rf_path)
+                
+            # 2. LSTM Model Training/Loading
+            X_train_lstm, y_train_lstm, scaler = prepare_lstm_data(df.iloc[:-1], optimal_features) 
+            SCALER_DICT[t] = scaler
+            
+            if not os.path.exists(lstm_path) and len(X_train_lstm) > 0:
+                lstm_model = train_lstm_model(t, X_train_lstm, y_train_lstm, len(optimal_features))
+                if lstm_model:
+                    lstm_model.save(lstm_path)
+            elif os.path.exists(lstm_path):
+                lstm_model = load_model(lstm_path)
+
+            # --- PREDICTION ---
+            latest_data_series = df[optimal_features].iloc[-1].copy()
+
+            # RF Prediction Setup: Inject *real-time* sentiment 
+            if 'Sentiment_Score' in optimal_features:
+                latest_data_series['Sentiment_Score'] = sentiment_dict.get(t, 0)
+            X_pred = np.array([latest_data_series.to_list()])
+            
+            # 1. RF Prediction & Confidence
+            rf_pred_mean, predicted_low, predicted_high, rf_conf = None, None, None, 0.0
+            if rf_model:
+                individual_preds = [tree.predict(X_pred)[0] for tree in rf_model.estimators_]
+                rf_pred_mean = np.mean(individual_preds)
+                predicted_low = np.percentile(individual_preds, 10)
+                predicted_high = np.percentile(individual_preds, 90)
+                pred_std = np.std(individual_preds)
+                relative_spread = pred_std / rf_pred_mean
+                rf_conf = max(0.0, 1.0 - (10 * relative_spread)) 
+            
+            # 2. LSTM Prediction & Confidence 
+            lstm_pred_mean = None
+            lstm_conf = 0.0
+            if lstm_model:
+                scaler = SCALER_DICT.get(t)
+                if scaler:
+                    data_to_scale = df[optimal_features].iloc[-LSTM_TIMESTEPS:].values
+                    
+                    if len(data_to_scale) == LSTM_TIMESTEPS:
+                        scaled_data_pred = scaler.transform(data_to_scale)
+                        X_pred_lstm = scaled_data_pred[np.newaxis, :, :] 
+                        scaled_pred = lstm_model.predict(X_pred_lstm, verbose=0)
+                        
+                        dummy_array = np.zeros((1, len(optimal_features)))
+                        close_idx = optimal_features.index('Close')
+                        dummy_array[0, close_idx] = scaled_pred[0, 0]
+                        lstm_pred_mean = scaler.inverse_transform(dummy_array)[0, close_idx]
+                        lstm_conf = MODEL_WEIGHTS[t]['lstm'] 
+            
+            # 3. Model Selection Logic
+            rf_w = MODEL_WEIGHTS[t]['rf']
+            lstm_w = MODEL_WEIGHTS[t]['lstm']
+            
+            final_pred = None
+            model_used = 'N/A'
+            SINGLE_MODEL_THRESHOLD = 0.65 
+            
+            if rf_pred_mean and lstm_pred_mean:
+                if rf_w >= SINGLE_MODEL_THRESHOLD and rf_w > lstm_w:
+                    final_pred = rf_pred_mean
+                    model_used = 'RF (High Conf)'
+                elif lstm_w >= SINGLE_MODEL_THRESHOLD and lstm_w > rf_w:
+                    final_pred = lstm_pred_mean
+                    model_used = 'LSTM (High Conf)'
+                else:
+                    final_pred = (rf_pred_mean * rf_w) + (lstm_pred_mean * lstm_w)
+                    model_used = f'Ensemble ({rf_w:.0%} RF/{lstm_w:.0%} LSTM)'
+            elif rf_pred_mean:
+                final_pred = rf_pred_mean
+                model_used = 'RF (Fallback)'
+            elif lstm_pred_mean:
+                final_pred = lstm_pred_mean
+                model_used = 'LSTM (Fallback)'
+
+            if model_used.startswith('RF'):
+                final_conf = rf_conf
+            elif model_used.startswith('LSTM'):
+                final_conf = lstm_conf
+            else: 
+                final_conf = (rf_conf * rf_w) + (lstm_conf * lstm_w)
+            
+            results.append({
+                'Ticker': t, 
+                'Next_Close': f"${final_pred:.2f}" if final_pred else 'N/A', 
+                'Conf': final_conf,
+                'Predicted_Price': final_pred, 
+                'Predicted_High': predicted_high, 
+                'Predicted_Low': predicted_low,  
+                'Features': ", ".join(optimal_features),
+                'RF_Pred': rf_pred_mean,
+                'LSTM_Pred': lstm_pred_mean,
+                'Model_Used': model_used, 
+                'RF_Weight': rf_w, 
+                'LSTM_Weight': lstm_w 
+            })
+
+        except Exception as e:
+            results.append({'Ticker': t, 'Next_Close': 'N/A', 'Conf': 0.0, 'Predicted_Price': None, 'Predicted_High': None, 'Predicted_Low': None, 'Features': 'N/A', 'RF_Pred': None, 'LSTM_Pred': None, 'Model_Used': 'Error', 'RF_Weight': 0.5, 'LSTM_Weight': 0.5})
+            log(f"Ensemble Prediction failed for {t}: {e}")
+            
+    return pd.DataFrame(results).set_index('Ticker')
+
+def check_predictive_6per(predictions_df):
+    """
+    FIX 3: Completed stub. Checks if the prediction is significantly different 
+    from the current price (e.g., a potential 6% change).
+    This function assumes a helper function, get_current_price, retrieves the latest price.
+    """
+    ALERT_THRESHOLD_PERCENT = 0.06
+    alerts = []
+    current_prices = st.session_state.current_prices # Assumes get_current_price has been called
+    
+    if predictions_df.empty:
+        return alerts
+
+    for t in predictions_df.index:
+        final_pred = predictions_df.loc[t, 'Predicted_Price']
+        current_price = current_prices.get(t)
+
+        if final_pred is None or current_price is None:
+            continue
+
+        percentage_change = (final_pred - current_price) / current_price
+        
+        if abs(percentage_change) >= ALERT_THRESHOLD_PERCENT:
+            direction = "UP" if percentage_change > 0 else "DOWN"
+            conf = predictions_df.loc[t, 'Conf']
+            
+            alert_msg = (
+                f"🚨 **PREDICTIVE ALERT: {t} ({ASSET_NAMES.get(t, t)})**\n"
+                f"Model predicts significant movement: **{direction} {abs(percentage_change):.2%}**\n"
+                f"Current Price: ${current_price:.2f}\n"
+                f"Predicted Next Close: ${final_pred:.2f}\n"
+                f"Confidence Score: {conf:.2%}"
+            )
+            alerts.append(alert_msg)
+            st.session_state.alerted_tickers_yesterday.add(t) # Track alert for daily report
+            send_telegram(alert_msg, silent=False)
+            log(f"ALERT SENT for {t}: Prediction {percentage_change:.2%} from current price.")
+
+    return alerts
+
+# The main loop logic that calls these functions (e.g., oracle_loop, which is missing from 
+# the snippet but implied) would use:
+# 1. get_current_price(t) inside a loop before prediction.
+# 2. predictions = predict_with_ensemble(MONITORED_ASSETS)
+# 3. check_predictive_6per(predictions)[2025-11-11 22:58:44] Oracle cycle started.
+[2025-11-11 22:58:44] Initiating daily check for yesterday's actuals (2025-11-10) and reporting...
+[2025-11-11 22:58:44] Fetching current prices...
+[2025-11-11 22:58:53] Running ensemble prediction...
+[2025-11-11 22:58:55] Alpha Vantage Rate Limit hit. Retrying in 1.0s...
+[2025-11-11 22:58:58] Alpha Vantage Rate Limit hit. Retrying in 2.3s...
+[2025-11-11 22:59:01] Alpha Vantage Rate Limit hit. Retrying in 4.1s...
+[2025-11-11 22:59:06] Failed to fetch Alpha Vantage sentiment after multiple retries.
+[2025-11-11 22:59:10] Ensemble Prediction failed for AAPL: Not allowed to merge between different levels. (2 levels on the left, 1 on the right)
+[2025-11-11 22:59:13] Ensemble Prediction failed for TSLA: Not allowed to merge between different levels. (2 levels on the left, 1 on the right)
+[2025-11-11 22:59:16] Ensemble Prediction failed for NVDA: Not allowed to merge between different levels. (2 levels on the left, 1 on the right)
+[2025-11-11 22:59:19] Ensemble Prediction failed for MSFT: Not allowed to merge between different levels. (2 levels on the left, 1 on the right)
+[2025-11-11 22:59:22] Ensemble Prediction failed for GOOGL: Not allowed to merge between different levels. (2 levels on the left, 1 on the right)
+[2025-11-11 22:59:25] Ensemble Prediction failed for PLTR: Not allowed to merge between different levels. (2 levels on the left, 1 on the right)
+[2025-11-11 22:59:28] Ensemble Prediction failed for MSTR: Not allowed to merge between different levels. (2 levels on the left, 1 on the right)
+[2025-11-11 22:59:30] Ensemble Prediction failed for COIN: Not allowed to merge between different levels. (2 levels on the left, 1 on the right)
+[2025-11-11 22:59:34] Ensemble Prediction failed for ZC=F: Not allowed to merge between different levels. (2 levels on the left, 1 on the right)
+[2025-11-11 22:59:36] Ensemble Prediction failed for GC=F: Not allowed to merge between different levels. (2 levels on the left, 1 on the right)
+[2025-11-11 22:59:39] Ensemble Prediction failed for KC=F: Not allowed to merge between different levels. (2 levels on the left, 1 on the right)
+[2025-11-11 22:59:42] Ensemble Prediction failed for CL=F: Not allowed to merge between different levels. (2 levels on the left, 1 on the right)
+[2025-11-11 22:59:45] Ensemble Prediction failed for SPY: Not allowed to merge between different levels. (2 levels on the left, 1 on the right)
+[2025-11-11 22:59:48] Ensemble Prediction failed for DIA: Not allowed to merge between different levels. (2 levels on the left, 1 on the right)
+[2025-11-11 22:59:52] Ensemble Prediction failed for EURUSD=X: Not allowed to merge between different levels. (2 levels on the left, 1 on the right)
+[2025-11-11 22:59:55] Ensemble Prediction failed for JPY=X: Not allowed to merge between different levels. (2 levels on the left, 1 on the right)
+[2025-11-11 22:59:55] Checking for predictive alerts...
+[2025-11-11 22:59:55] Oracle cycle finished successfully.
+[2025-11-11 23:04:12] Oracle cycle started.
+[2025-11-11 23:10:01] Oracle cycle started.
+[2025-11-11 23:10:01] Fetching current prices...
+[2025-11-11 23:10:09] Running ensemble prediction...
+[2025-11-11 23:10:11] Alpha Vantage Rate Limit hit. Retrying in 1.5s...
+[2025-11-11 23:10:14] Alpha Vantage Rate Limit hit. Retrying in 2.2s...
+[2025-11-11 23:10:18] Alpha Vantage Rate Limit hit. Retrying in 4.2s...
+[2025-11-11 23:10:22] Failed to fetch Alpha Vantage sentiment after multiple retries.
+[2025-11-11 23:10:27] Ensemble Prediction failed for AAPL: Not allowed to merge between different levels. (2 levels on the left, 1 on the right)
+[2025-11-11 23:10:30] Ensemble Prediction failed for TSLA: Not allowed to merge between different levels. (2 levels on the left, 1 on the right)
+[2025-11-11 23:10:33] Ensemble Prediction failed for NVDA: Not allowed to merge between different levels. (2 levels on the left, 1 on the right)
+[2025-11-11 23:10:36] Ensemble Prediction failed for MSFT: Not allowed to merge between different levels. (2 levels on the left, 1 on the right)
+[2025-11-11 23:10:40] Ensemble Prediction failed for GOOGL: Not allowed to merge between different levels. (2 levels on the left, 1 on the right)
+[2025-11-11 23:10:43] Ensemble Prediction failed for PLTR: Not allowed to merge between different levels. (2 levels on the left, 1 on the right)
+[2025-11-11 23:10:46] Ensemble Prediction failed for MSTR: Not allowed to merge between different levels. (2 levels on the left, 1 on the right)
+[2025-11-11 23:10:49] Ensemble Prediction failed for COIN: Not allowed to merge between different levels. (2 levels on the left, 1 on the right)
+[2025-11-11 23:10:52] Ensemble Prediction failed for ZC=F: Not allowed to merge between different levels. (2 levels on the left, 1 on the right)
+[2025-11-11 23:10:55] Ensemble Prediction failed for GC=F: Not allowed to merge between different levels. (2 levels on the left, 1 on the right)
+[2025-11-11 23:10:58] Ensemble Prediction failed for KC=F: Not allowed to merge between different levels. (2 levels on the left, 1 on the right)
+[2025-11-11 23:11:01] Ensemble Prediction failed for CL=F: Not allowed to merge between different levels. (2 levels on the left, 1 on the right)
+[2025-11-11 23:11:05] Ensemble Prediction failed for SPY: Not allowed to merge between different levels. (2 levels on the left, 1 on the right)
+[2025-11-11 23:11:08] Ensemble Prediction failed for DIA: Not allowed to merge between different levels. (2 levels on the left, 1 on the right)
+[2025-11-11 23:11:11] Ensemble Prediction failed for EURUSD=X: Not allowed to merge between different levels. (2 levels on the left, 1 on the right)
+[2025-11-11 23:11:14] Ensemble Prediction failed for JPY=X: Not allowed to merge between different levels. (2 levels on the left, 1 on the right)
+[2025-11-11 23:11:14] Checking for predictive alerts...
+[2025-11-11 23:11:14] Oracle cycle finished successfully.
+[2025-11-11 23:26:20] Oracle started with PREDICTIVE alerts enabled.
+[2025-11-11 23:26:20] Initiating daily check for yesterday's actuals and reporting...
+[2025-11-11 23:26:21] Daily status report sent to Telegram.
+[2025-11-11 23:26:21] Error calculating dynamic weights for AAPL. Using 0.5/0.5 default. Error: ['RF_Perc_Error', 'LSTM_Perc_Error']
+[2025-11-11 23:26:21] Error calculating dynamic weights for TSLA. Using 0.5/0.5 default. Error: ['RF_Perc_Error', 'LSTM_Perc_Error']
+[2025-11-11 23:26:21] Error calculating dynamic weights for NVDA. Using 0.5/0.5 default. Error: ['RF_Perc_Error', 'LSTM_Perc_Error']
+[2025-11-11 23:26:21] Error calculating dynamic weights for MSFT. Using 0.5/0.5 default. Error: ['RF_Perc_Error', 'LSTM_Perc_Error']
+[2025-11-11 23:26:21] Error calculating dynamic weights for GOOGL. Using 0.5/0.5 default. Error: ['RF_Perc_Error', 'LSTM_Perc_Error']
+[2025-11-11 23:26:21] Error calculating dynamic weights for PLTR. Using 0.5/0.5 default. Error: ['RF_Perc_Error', 'LSTM_Perc_Error']
+[2025-11-11 23:26:22] Error calculating dynamic weights for MSTR. Using 0.5/0.5 default. Error: ['RF_Perc_Error', 'LSTM_Perc_Error']
+[2025-11-11 23:26:22] Error calculating dynamic weights for COIN. Using 0.5/0.5 default. Error: ['RF_Perc_Error', 'LSTM_Perc_Error']
+[2025-11-11 23:26:22] Error calculating dynamic weights for ZC=F. Using 0.5/0.5 default. Error: ['RF_Perc_Error', 'LSTM_Perc_Error']
+[2025-11-11 23:26:22] Error calculating dynamic weights for GC=F. Using 0.5/0.5 default. Error: ['RF_Perc_Error', 'LSTM_Perc_Error']
+[2025-11-11 23:26:22] Error calculating dynamic weights for KC=F. Using 0.5/0.5 default. Error: ['RF_Perc_Error', 'LSTM_Perc_Error']
+[2025-11-11 23:26:22] Error calculating dynamic weights for CL=F. Using 0.5/0.5 default. Error: ['RF_Perc_Error', 'LSTM_Perc_Error']
+[2025-11-11 23:26:22] Error calculating dynamic weights for SPY. Using 0.5/0.5 default. Error: ['RF_Perc_Error', 'LSTM_Perc_Error']
+[2025-11-11 23:26:22] Error calculating dynamic weights for DIA. Using 0.5/0.5 default. Error: ['RF_Perc_Error', 'LSTM_Perc_Error']
+[2025-11-11 23:26:22] Error calculating dynamic weights for EURUSD=X. Using 0.5/0.5 default. Error: ['RF_Perc_Error', 'LSTM_Perc_Error']
+[2025-11-11 23:26:22] Error calculating dynamic weights for JPY=X. Using 0.5/0.5 default. Error: ['RF_Perc_Error', 'LSTM_Perc_Error']
+[2025-11-11 23:26:22] Oracle loop stopped by flag.
+[2025-11-11 23:26:22] Oracle thread fully terminated.
+[2025-11-12 00:00:12] ALERTED TICKER SET RESET for new date: 2025-11-12
+[2025-11-12 00:13:44] Oracle started with PREDICTIVE alerts enabled.
+[2025-11-12 00:13:44] Initiating daily check for yesterday's actuals...
+[2025-11-12 00:13:44] Error calculating dynamic weights for AAPL. Using 0.5/0.5 default. Error: ['RF_Perc_Error', 'LSTM_Perc_Error']
+[2025-11-12 00:13:44] Error calculating dynamic weights for TSLA. Using 0.5/0.5 default. Error: ['RF_Perc_Error', 'LSTM_Perc_Error']
+[2025-11-12 00:13:45] Error calculating dynamic weights for NVDA. Using 0.5/0.5 default. Error: ['RF_Perc_Error', 'LSTM_Perc_Error']
+[2025-11-12 00:13:45] Error calculating dynamic weights for MSFT. Using 0.5/0.5 default. Error: ['RF_Perc_Error', 'LSTM_Perc_Error']
+[2025-11-12 00:13:45] Error calculating dynamic weights for GOOGL. Using 0.5/0.5 default. Error: ['RF_Perc_Error', 'LSTM_Perc_Error']
+[2025-11-12 00:13:45] Error calculating dynamic weights for PLTR. Using 0.5/0.5 default. Error: ['RF_Perc_Error', 'LSTM_Perc_Error']
+[2025-11-12 00:13:45] Error calculating dynamic weights for MSTR. Using 0.5/0.5 default. Error: ['RF_Perc_Error', 'LSTM_Perc_Error']
+[2025-11-12 00:13:45] Error calculating dynamic weights for COIN. Using 0.5/0.5 default. Error: ['RF_Perc_Error', 'LSTM_Perc_Error']
+[2025-11-12 00:13:45] Error calculating dynamic weights for ZW=F. Using 0.5/0.5 default. Error: ['RF_Perc_Error', 'LSTM_Perc_Error']
+[2025-11-12 00:13:45] Error calculating dynamic weights for GC=F. Using 0.5/0.5 default. Error: ['RF_Perc_Error', 'LSTM_Perc_Error']
+[2025-11-12 00:13:45] Error calculating dynamic weights for KC=F. Using 0.5/0.5 default. Error: ['RF_Perc_Error', 'LSTM_Perc_Error']
+[2025-11-12 00:13:45] Error calculating dynamic weights for CL=F. Using 0.5/0.5 default. Error: ['RF_Perc_Error', 'LSTM_Perc_Error']
+[2025-11-12 00:13:45] Error calculating dynamic weights for ^GSPC. Using 0.5/0.5 default. Error: ['RF_Perc_Error', 'LSTM_Perc_Error']
+[2025-11-12 00:13:45] Error calculating dynamic weights for ^DJI. Using 0.5/0.5 default. Error: ['RF_Perc_Error', 'LSTM_Perc_Error']
+[2025-11-12 00:13:45] Error calculating dynamic weights for EURUSD=X. Using 0.5/0.5 default. Error: ['RF_Perc_Error', 'LSTM_Perc_Error']
+[2025-11-12 00:13:45] Error calculating dynamic weights for USDJPY=X. Using 0.5/0.5 default. Error: ['RF_Perc_Error', 'LSTM_Perc_Error']
+[2025-11-12 00:13:45] Oracle loop stopped by flag.
+[2025-11-12 00:13:45] Oracle thread fully terminated.

@@ -1,0 +1,5 @@
+Ticker       Category     MSE
+--------------------------------------------------
+ZW=F         Commodities  4.15
+GC=F         Commodities  4.15
+TSLA         Stocks       4.15

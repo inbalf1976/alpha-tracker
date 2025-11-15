@@ -1,0 +1,537 @@
+[14:08:47] ALPHA ORACLE v7.3 � LOCAL MODE ACTIVE
+[14:23:55] MODEL SAVED: TSLA
+[14:23:58] MODEL SAVED: NVDA
+[14:23:59] MODEL SAVED: MSFT
+[14:24:00] MODEL SAVED: GOOGL
+[14:24:01] MODEL SAVED: PLTR
+[14:24:02] MODEL SAVED: MSTR
+[14:24:03] MODEL SAVED: COIN
+[14:24:05] MODEL SAVED: ZC=F
+[14:24:06] MODEL SAVED: GC=F
+[14:24:07] MODEL SAVED: KC=F
+[14:24:09] MODEL SAVED: CL=F
+[14:24:10] MODEL SAVED: SPY
+[14:24:11] MODEL SAVED: ZW=F
+[14:24:11] ALPHA ORACLE v7.5 — ALL ASSETS LIVE
+[14:24:12] MODEL LOADED: AAPL
+[14:24:12] PREDICT ERR AAPL: unsupported format string passed to Series.__format__
+[14:24:12] ERR AAPL: The truth value of a Series is ambiguous. Use a.empty, a.bool(), a.item(), a.any() or a.all().
+[14:24:13] MODEL LOADED: TSLA
+[14:24:13] PREDICT ERR TSLA: unsupported format string passed to Series.__format__
+[14:24:13] ERR TSLA: The truth value of a Series is ambiguous. Use a.empty, a.bool(), a.item(), a.any() or a.all().
+[14:24:13] MODEL LOADED: NVDA
+[14:24:13] PREDICT ERR NVDA: unsupported format string passed to Series.__format__
+[14:24:13] ERR NVDA: The truth value of a Series is ambiguous. Use a.empty, a.bool(), a.item(), a.any() or a.all().
+[14:24:15] MODEL LOADED: MSFT
+[14:24:15] PREDICT ERR MSFT: unsupported format string passed to Series.__format__
+[14:24:15] ERR MSFT: The truth value of a Series is ambiguous. Use a.empty, a.bool(), a.item(), a.any() or a.all().
+[14:24:15] MODEL LOADED: GOOGL
+[14:24:15] PREDICT ERR GOOGL: unsupported format string passed to Series.__format__
+[14:24:15] ERR GOOGL: The truth value of a Series is ambiguous. Use a.empty, a.bool(), a.item(), a.any() or a.all().
+[14:24:16] MODEL LOADED: PLTR
+[14:24:16] PREDICT ERR PLTR: unsupported format string passed to Series.__format__
+[14:24:16] ERR PLTR: The truth value of a Series is ambiguous. Use a.empty, a.bool(), a.item(), a.any() or a.all().
+[14:24:17] MODEL LOADED: MSTR
+[14:24:17] PREDICT ERR MSTR: unsupported format string passed to Series.__format__
+[14:24:17] ERR MSTR: The truth value of a Series is ambiguous. Use a.empty, a.bool(), a.item(), a.any() or a.all().
+[14:24:18] MODEL LOADED: COIN
+[14:24:18] PREDICT ERR COIN: unsupported format string passed to Series.__format__
+[14:24:18] ERR COIN: The truth value of a Series is ambiguous. Use a.empty, a.bool(), a.item(), a.any() or a.all().
+[14:24:19] MODEL LOADED: ZC=F
+[14:24:19] PREDICT ERR ZC=F: unsupported format string passed to Series.__format__
+[14:24:19] ERR ZC=F: The truth value of a Series is ambiguous. Use a.empty, a.bool(), a.item(), a.any() or a.all().
+[14:24:20] MODEL LOADED: GC=F
+[14:24:21] PREDICT ERR GC=F: unsupported format string passed to Series.__format__
+[14:24:21] ERR GC=F: The truth value of a Series is ambiguous. Use a.empty, a.bool(), a.item(), a.any() or a.all().
+[14:24:21] MODEL LOADED: KC=F
+[14:24:21] PREDICT ERR KC=F: unsupported format string passed to Series.__format__
+[14:24:21] ERR KC=F: The truth value of a Series is ambiguous. Use a.empty, a.bool(), a.item(), a.any() or a.all().
+[14:24:22] MODEL LOADED: CL=F
+[14:24:22] PREDICT ERR CL=F: unsupported format string passed to Series.__format__
+[14:24:22] ERR CL=F: The truth value of a Series is ambiguous. Use a.empty, a.bool(), a.item(), a.any() or a.all().
+[14:24:23] MODEL LOADED: SPY
+[14:24:23] PREDICT ERR SPY: unsupported format string passed to Series.__format__
+[14:24:23] ERR SPY: The truth value of a Series is ambiguous. Use a.empty, a.bool(), a.item(), a.any() or a.all().
+[14:24:24] MODEL LOADED: ZW=F
+[14:24:24] PREDICT ERR ZW=F: unsupported format string passed to Series.__format__
+[14:24:24] ERR ZW=F: unsupported format string passed to Series.__format__
+[14:29:25] MODEL LOADED: AAPL
+[14:29:25] PREDICT ERR AAPL: unsupported format string passed to Series.__format__
+[14:29:25] ERR AAPL: The truth value of a Series is ambiguous. Use a.empty, a.bool(), a.item(), a.any() or a.all().
+[14:29:26] MODEL LOADED: TSLA
+[14:29:26] PREDICT ERR TSLA: unsupported format string passed to Series.__format__
+[14:29:26] ERR TSLA: The truth value of a Series is ambiguous. Use a.empty, a.bool(), a.item(), a.any() or a.all().
+[14:29:27] MODEL LOADED: NVDA
+[14:29:27] PREDICT ERR NVDA: unsupported format string passed to Series.__format__
+[14:29:27] ERR NVDA: The truth value of a Series is ambiguous. Use a.empty, a.bool(), a.item(), a.any() or a.all().
+[14:29:28] MODEL LOADED: MSFT
+[14:29:28] PREDICT ERR MSFT: unsupported format string passed to Series.__format__
+[14:29:28] ERR MSFT: The truth value of a Series is ambiguous. Use a.empty, a.bool(), a.item(), a.any() or a.all().
+[14:29:29] MODEL LOADED: GOOGL
+[14:29:29] PREDICT ERR GOOGL: unsupported format string passed to Series.__format__
+[14:29:29] ERR GOOGL: The truth value of a Series is ambiguous. Use a.empty, a.bool(), a.item(), a.any() or a.all().
+[14:29:30] MODEL LOADED: PLTR
+[14:29:30] PREDICT ERR PLTR: unsupported format string passed to Series.__format__
+[14:29:30] ERR PLTR: The truth value of a Series is ambiguous. Use a.empty, a.bool(), a.item(), a.any() or a.all().
+[14:29:30] MODEL LOADED: MSTR
+[14:29:30] PREDICT ERR MSTR: unsupported format string passed to Series.__format__
+[14:29:30] ERR MSTR: The truth value of a Series is ambiguous. Use a.empty, a.bool(), a.item(), a.any() or a.all().
+[14:29:32] MODEL LOADED: COIN
+[14:29:32] PREDICT ERR COIN: unsupported format string passed to Series.__format__
+[14:29:32] ERR COIN: The truth value of a Series is ambiguous. Use a.empty, a.bool(), a.item(), a.any() or a.all().
+[14:29:32] MODEL LOADED: ZC=F
+[14:29:33] PREDICT ERR ZC=F: unsupported format string passed to Series.__format__
+[14:29:33] ERR ZC=F: The truth value of a Series is ambiguous. Use a.empty, a.bool(), a.item(), a.any() or a.all().
+[14:29:34] MODEL LOADED: GC=F
+[14:29:34] PREDICT ERR GC=F: unsupported format string passed to Series.__format__
+[14:29:34] ERR GC=F: The truth value of a Series is ambiguous. Use a.empty, a.bool(), a.item(), a.any() or a.all().
+[14:29:35] MODEL LOADED: KC=F
+[14:29:35] PREDICT ERR KC=F: unsupported format string passed to Series.__format__
+[14:29:35] ERR KC=F: The truth value of a Series is ambiguous. Use a.empty, a.bool(), a.item(), a.any() or a.all().
+[14:29:36] MODEL LOADED: CL=F
+[14:29:36] PREDICT ERR CL=F: unsupported format string passed to Series.__format__
+[14:29:36] ERR CL=F: The truth value of a Series is ambiguous. Use a.empty, a.bool(), a.item(), a.any() or a.all().
+[14:29:37] MODEL LOADED: SPY
+[14:29:37] PREDICT ERR SPY: unsupported format string passed to Series.__format__
+[14:29:37] ERR SPY: The truth value of a Series is ambiguous. Use a.empty, a.bool(), a.item(), a.any() or a.all().
+[14:29:38] MODEL LOADED: ZW=F
+[14:29:38] PREDICT ERR ZW=F: unsupported format string passed to Series.__format__
+[14:29:38] ERR ZW=F: unsupported format string passed to Series.__format__
+[14:33:08] ALPHA ORACLE v7.6 — LIVE
+[14:33:11] MODEL LOADED: AAPL
+[14:33:11] REAL PRED: AAPL 272.39 to 253.13 (-7.07%)
+[14:33:13] MODEL LOADED: TSLA
+[14:33:13] REAL PRED: TSLA 383.29 to 377.06 (-1.63%)
+[14:33:14] MODEL LOADED: NVDA
+[14:33:14] REAL PRED: NVDA 180.88 to 154.21 (-14.75%)
+[14:33:15] MODEL LOADED: MSFT
+[14:33:15] REAL PRED: MSFT 499.40 to 490.52 (-1.78%)
+[14:33:16] MODEL LOADED: GOOGL
+[14:33:16] REAL PRED: GOOGL 271.28 to 199.62 (-26.41%)
+[14:33:17] MODEL LOADED: PLTR
+[14:33:17] REAL PRED: PLTR 164.74 to 125.50 (-23.82%)
+[14:33:18] MODEL LOADED: MSTR
+[14:33:18] REAL PRED: MSTR 195.49 to 191.15 (-2.22%)
+[14:33:19] MODEL LOADED: COIN
+[14:33:19] REAL PRED: COIN 269.48 to 281.86 (+4.59%)
+[14:33:20] MODEL LOADED: ZC=F
+[14:33:20] REAL PRED: ZC=F 441.75 to 444.07 (+0.53%)
+[14:33:38] MODEL LOADED: GC=F
+[14:33:38] REAL PRED: GC=F 4119.00 to 3355.44 (-18.54%)
+[14:33:44] MODEL LOADED: KC=F
+[14:33:44] REAL PRED: KC=F 366.90 to 376.23 (+2.54%)
+[14:34:03] MODEL LOADED: CL=F
+[14:34:03] REAL PRED: CL=F 59.61 to 60.55 (+1.58%)
+[14:34:08] MODEL LOADED: SPY
+[14:34:08] REAL PRED: SPY 665.84 to 602.66 (-9.49%)
+[14:34:19] MODEL LOADED: ZW=F
+[14:34:19] REAL PRED: ZW=F 555.25 to 558.79 (+0.64%)
+[14:34:19] WHEAT: 555.25 to 558.79 (+0.64%)
+[14:39:20] MODEL LOADED: AAPL
+[14:39:20] REAL PRED: AAPL 271.95 to 253.13 (-6.92%)
+[14:39:21] MODEL LOADED: TSLA
+[14:39:21] REAL PRED: TSLA 382.57 to 377.06 (-1.44%)
+[14:39:22] MODEL LOADED: NVDA
+[14:39:22] REAL PRED: NVDA 180.57 to 154.21 (-14.60%)
+[14:39:23] MODEL LOADED: MSFT
+[14:39:23] REAL PRED: MSFT 499.46 to 490.52 (-1.79%)
+[14:39:23] MODEL LOADED: GOOGL
+[14:39:23] REAL PRED: GOOGL 271.70 to 199.62 (-26.53%)
+[14:39:24] MODEL LOADED: PLTR
+[14:39:24] REAL PRED: PLTR 164.06 to 125.50 (-23.50%)
+[14:39:25] MODEL LOADED: MSTR
+[14:39:25] REAL PRED: MSTR 195.00 to 191.13 (-1.98%)
+[14:39:26] MODEL LOADED: COIN
+[14:39:26] REAL PRED: COIN 268.11 to 279.04 (+4.08%)
+[14:39:27] MODEL LOADED: ZC=F
+[14:39:27] REAL PRED: ZC=F 441.75 to 444.07 (+0.53%)
+[14:39:28] MODEL LOADED: GC=F
+[14:39:28] REAL PRED: GC=F 4116.60 to 3353.16 (-18.55%)
+[14:39:29] MODEL LOADED: KC=F
+[14:39:29] REAL PRED: KC=F 365.40 to 359.16 (-1.71%)
+[14:39:29] MODEL LOADED: CL=F
+[14:39:29] REAL PRED: CL=F 59.53 to 60.56 (+1.72%)
+[14:39:30] MODEL LOADED: SPY
+[14:39:30] REAL PRED: SPY 665.34 to 602.66 (-9.42%)
+[14:39:31] MODEL LOADED: ZW=F
+[14:39:31] REAL PRED: ZW=F 540.25 to 538.38 (-0.35%)
+[14:39:31] WHEAT: 540.25 to 538.38 (-0.35%)
+[17:30:58] ALPHA ORACLE v7.7 — LIVE
+[17:30:59] MODEL LOADED: AAPL
+[17:30:59] REAL PRED: AAPL 273.59 to 253.13 (-7.48%)
+[17:31:00] MODEL LOADED: TSLA
+[17:31:00] REAL PRED: TSLA 399.84 to 382.53 (-4.33%)
+[17:31:01] MODEL LOADED: NVDA
+[17:31:01] REAL PRED: NVDA 187.15 to 154.21 (-17.60%)
+[17:31:02] MODEL LOADED: MSFT
+[17:31:02] REAL PRED: MSFT 504.98 to 490.52 (-2.86%)
+[17:31:03] MODEL LOADED: GOOGL
+[17:31:03] REAL PRED: GOOGL 276.45 to 199.62 (-27.79%)
+[17:31:04] MODEL LOADED: PLTR
+[17:31:04] REAL PRED: PLTR 173.29 to 134.11 (-22.61%)
+[17:31:06] MODEL LOADED: MSTR
+[17:31:06] REAL PRED: MSTR 199.55 to 191.34 (-4.12%)
+[17:31:07] MODEL LOADED: COIN
+[17:31:07] REAL PRED: COIN 283.20 to 287.58 (+1.55%)
+[17:31:08] MODEL LOADED: ZC=F
+[17:31:08] REAL PRED: ZC=F 441.25 to 443.96 (+0.61%)
+[17:31:09] MODEL LOADED: GC=F
+[17:31:09] REAL PRED: GC=F 4080.80 to 3353.16 (-17.83%)
+[17:31:10] MODEL LOADED: KC=F
+[17:31:10] REAL PRED: KC=F 365.05 to 358.58 (-1.77%)
+[17:31:10] MODEL LOADED: CL=F
+[17:31:10] REAL PRED: CL=F 60.03 to 60.68 (+1.08%)
+[17:31:11] MODEL LOADED: SPY
+[17:31:11] REAL PRED: SPY 669.79 to 602.66 (-10.02%)
+[17:31:12] MODEL LOADED: ZW=F
+[17:31:12] REAL PRED: ZW=F 554.25 to 556.03 (+0.32%)
+[17:31:12] WHEAT: 554.25 to 556.03 (+0.32%)
+[17:36:46] ALPHA ORACLE v7.8 — LIVE
+[17:36:48] MODEL LOADED: AAPL
+[17:36:48] REAL PRED: AAPL 273.71 to 253.13 (-7.52%)
+[17:36:50] MODEL LOADED: TSLA
+[17:36:50] REAL PRED: TSLA 399.85 to 382.53 (-4.33%)
+[17:36:51] MODEL LOADED: NVDA
+[17:36:51] REAL PRED: NVDA 187.21 to 154.21 (-17.63%)
+[17:36:51] MODEL LOADED: MSFT
+[17:36:51] REAL PRED: MSFT 505.85 to 490.52 (-3.03%)
+[17:36:53] MODEL LOADED: GOOGL
+[17:36:53] REAL PRED: GOOGL 277.01 to 199.62 (-27.94%)
+[17:36:54] MODEL LOADED: PLTR
+[17:36:54] REAL PRED: PLTR 173.91 to 125.67 (-27.74%)
+[17:36:54] MODEL LOADED: MSTR
+[17:36:54] REAL PRED: MSTR 202.54 to 192.14 (-5.13%)
+[17:36:55] MODEL LOADED: COIN
+[17:36:55] REAL PRED: COIN 284.12 to 287.50 (+1.19%)
+[17:36:56] MODEL LOADED: ZC=F
+[17:36:56] REAL PRED: ZC=F 441.00 to 442.69 (+0.38%)
+[17:36:57] MODEL LOADED: GC=F
+[17:36:57] REAL PRED: GC=F 4077.40 to 3353.16 (-17.76%)
+[17:36:58] MODEL LOADED: KC=F
+[17:36:58] REAL PRED: KC=F 392.00 to 380.31 (-2.98%)
+[17:36:58] MODEL LOADED: CL=F
+[17:36:58] REAL PRED: CL=F 60.05 to 60.68 (+1.04%)
+[17:36:59] MODEL LOADED: SPY
+[17:36:59] REAL PRED: SPY 669.95 to 602.66 (-10.04%)
+[17:37:00] MODEL LOADED: ZW=F
+[17:37:00] REAL PRED: ZW=F 554.00 to 555.34 (+0.24%)
+[17:37:00] WHEAT: 554.00 to 555.34 (+0.24%)
+[17:42:04] MODEL LOADED: AAPL
+[17:42:04] REAL PRED: AAPL 273.99 to 253.13 (-7.61%)
+[17:42:12] MODEL LOADED: TSLA
+[17:42:12] REAL PRED: TSLA 401.92 to 382.64 (-4.80%)
+[17:42:13] MODEL LOADED: NVDA
+[17:42:13] REAL PRED: NVDA 187.89 to 154.21 (-17.93%)
+[17:42:15] MODEL LOADED: MSFT
+[17:42:15] REAL PRED: MSFT 506.98 to 490.52 (-3.25%)
+[17:42:17] MODEL LOADED: GOOGL
+[17:42:17] REAL PRED: GOOGL 277.35 to 199.62 (-28.02%)
+[17:42:19] MODEL LOADED: PLTR
+[17:42:19] REAL PRED: PLTR 174.83 to 125.67 (-28.12%)
+[17:42:20] MODEL LOADED: MSTR
+[17:42:20] REAL PRED: MSTR 203.72 to 192.54 (-5.49%)
+[17:42:22] MODEL LOADED: COIN
+[17:42:22] REAL PRED: COIN 284.37 to 286.29 (+0.67%)
+[17:42:24] MODEL LOADED: ZC=F
+[17:42:24] REAL PRED: ZC=F 441.00 to 442.69 (+0.38%)
+[17:42:25] MODEL LOADED: GC=F
+[17:42:25] REAL PRED: GC=F 4078.20 to 3353.16 (-17.78%)
+[17:42:27] MODEL LOADED: KC=F
+[17:42:27] REAL PRED: KC=F 391.90 to 380.49 (-2.91%)
+[17:42:28] MODEL LOADED: CL=F
+[17:42:28] REAL PRED: CL=F 60.12 to 60.68 (+0.93%)
+[17:42:28] MODEL LOADED: SPY
+[17:42:28] REAL PRED: SPY 670.88 to 602.66 (-10.17%)
+[17:42:29] MODEL LOADED: ZW=F
+[17:42:29] REAL PRED: ZW=F 554.00 to 555.23 (+0.22%)
+[17:42:29] WHEAT: 554.00 to 555.23 (+0.22%)
+[17:47:30] MODEL LOADED: AAPL
+[17:47:30] REAL PRED: AAPL 274.25 to 253.13 (-7.70%)
+[17:47:31] MODEL LOADED: TSLA
+[17:47:31] REAL PRED: TSLA 404.70 to 383.99 (-5.12%)
+[17:47:32] MODEL LOADED: NVDA
+[17:47:32] REAL PRED: NVDA 189.27 to 154.21 (-18.52%)
+[17:47:32] MODEL LOADED: MSFT
+[17:47:32] REAL PRED: MSFT 506.23 to 490.52 (-3.10%)
+[17:47:33] MODEL LOADED: GOOGL
+[17:47:33] REAL PRED: GOOGL 278.16 to 199.62 (-28.23%)
+[17:47:34] MODEL LOADED: PLTR
+[17:47:34] REAL PRED: PLTR 175.76 to 125.67 (-28.50%)
+[17:47:36] MODEL LOADED: MSTR
+[17:47:36] REAL PRED: MSTR 205.35 to 192.47 (-6.27%)
+[17:47:40] MODEL LOADED: COIN
+[17:47:40] REAL PRED: COIN 287.42 to 286.95 (-0.16%)
+[17:47:43] MODEL LOADED: ZC=F
+[17:47:43] REAL PRED: ZC=F 441.00 to 442.35 (+0.30%)
+[17:47:44] MODEL LOADED: GC=F
+[17:47:44] REAL PRED: GC=F 4080.20 to 3353.16 (-17.82%)
+[17:47:45] MODEL LOADED: KC=F
+[17:47:45] REAL PRED: KC=F 391.10 to 380.49 (-2.71%)
+[17:47:46] MODEL LOADED: CL=F
+[17:47:46] REAL PRED: CL=F 60.16 to 60.68 (+0.86%)
+[17:47:47] MODEL LOADED: SPY
+[17:47:47] REAL PRED: SPY 672.57 to 602.66 (-10.39%)
+[17:47:47] MODEL LOADED: ZW=F
+[17:47:47] REAL PRED: ZW=F 538.75 to 537.63 (-0.21%)
+[17:47:47] WHEAT: 538.75 to 537.63 (-0.21%)
+[17:52:48] MODEL LOADED: AAPL
+[17:52:48] REAL PRED: AAPL 274.27 to 253.13 (-7.71%)
+[17:52:49] MODEL LOADED: TSLA
+[17:52:49] REAL PRED: TSLA 405.05 to 383.21 (-5.39%)
+[17:52:50] MODEL LOADED: NVDA
+[17:52:50] REAL PRED: NVDA 188.79 to 154.21 (-18.32%)
+[17:52:51] MODEL LOADED: MSFT
+[17:52:51] REAL PRED: MSFT 506.58 to 490.52 (-3.17%)
+[17:52:52] MODEL LOADED: GOOGL
+[17:52:52] REAL PRED: GOOGL 278.24 to 199.62 (-28.26%)
+[17:52:52] MODEL LOADED: PLTR
+[17:52:52] REAL PRED: PLTR 175.51 to 125.67 (-28.40%)
+[17:52:54] MODEL LOADED: MSTR
+[17:52:54] REAL PRED: MSTR 204.80 to 193.24 (-5.64%)
+[17:52:55] MODEL LOADED: COIN
+[17:52:55] REAL PRED: COIN 287.91 to 287.74 (-0.06%)
+[17:52:56] MODEL LOADED: ZC=F
+[17:52:56] REAL PRED: ZC=F 441.75 to 442.35 (+0.14%)
+[17:52:57] MODEL LOADED: GC=F
+[17:52:57] REAL PRED: GC=F 4077.50 to 3353.16 (-17.76%)
+[17:52:57] MODEL LOADED: KC=F
+[17:52:57] REAL PRED: KC=F 365.00 to 358.49 (-1.78%)
+[17:52:58] MODEL LOADED: CL=F
+[17:52:58] REAL PRED: CL=F 60.17 to 60.68 (+0.84%)
+[17:52:59] MODEL LOADED: SPY
+[17:52:59] REAL PRED: SPY 672.38 to 602.66 (-10.37%)
+[17:53:01] MODEL LOADED: ZW=F
+[17:53:01] REAL PRED: ZW=F 553.50 to 555.30 (+0.33%)
+[17:53:01] WHEAT: 553.50 to 555.30 (+0.33%)
+[17:54:44] ALPHA ORACLE v7.9 — STARTED
+[17:54:46] PRED AAPL: 274.44 → 253.13 (-7.76%)
+[17:54:46] PRED AAPL: 274.44 → 253.13 (-7.76%)
+[17:54:46] OK AAPL: $274.44 → $253.13
+[17:54:47] PRED TSLA: 403.74 → 382.57 (-5.24%)
+[17:54:47] PRED TSLA: 403.74 → 382.57 (-5.24%)
+[17:54:47] OK TSLA: $403.74 → $382.57
+[17:54:48] PRED NVDA: 403.79 → 150.94 (-62.62%)
+[17:54:48] PRED NVDA: 403.79 → 150.94 (-62.62%)
+[17:54:48] OK NVDA: $403.79 → $150.94
+[17:54:48] PRED MSFT: 188.35 → 379.57 (+101.52%)
+[17:54:48] OK MSFT: $188.35 → $379.57
+[17:54:48] PRED MSFT: 188.35 → 379.57 (+101.52%)
+[17:54:48] PRED GOOGL: 506.67 → 199.62 (-60.60%)
+[17:54:48] PRED GOOGL: 506.67 → 199.62 (-60.60%)
+[17:54:48] OK GOOGL: $506.67 → $199.62
+[17:54:48] PRED PLTR: 188.33 → 125.50 (-33.36%)
+[17:54:49] PRED PLTR: 188.33 → 125.50 (-33.36%)
+[17:54:49] OK PLTR: $188.33 → $125.50
+[17:54:49] PRED MSTR: 277.59 → 291.50 (+5.01%)
+[17:54:49] OK MSTR: $277.59 → $291.50
+[17:54:49] PRED MSTR: 277.59 → 291.50 (+5.01%)
+[17:54:49] PRED COIN: 277.59 → 283.52 (+2.14%)
+[17:54:49] PRED COIN: 277.59 → 283.52 (+2.14%)
+[17:54:49] OK COIN: $277.59 → $283.52
+[17:54:50] PRED ZC=F: 175.29 → 369.31 (+110.68%)
+[17:54:50] PRED ZC=F: 175.29 → 369.31 (+110.68%)
+[17:54:50] OK ZC=F: $175.29 → $369.31
+[17:54:50] PRED GC=F: 205.14 → 2003.97 (+876.88%)
+[17:54:50] OK GC=F: $205.14 → $2003.97
+[17:54:50] PRED GC=F: 205.14 → 2003.97 (+876.88%)
+[17:54:50] PRED KC=F: 441.75 → 410.43 (-7.09%)
+[17:54:50] PRED KC=F: 441.75 → 410.43 (-7.09%)
+[17:54:50] OK KC=F: $441.75 → $410.43
+[17:54:51] PRED CL=F: 287.30 → 85.22 (-70.34%)
+[17:54:51] PRED CL=F: 287.30 → 85.22 (-70.34%)
+[17:54:51] OK CL=F: $287.30 → $85.22
+[17:54:51] PRED SPY: 441.75 → 460.12 (+4.16%)
+[17:54:51] PRED SPY: 365.30 → 460.66 (+26.10%)
+[17:54:51] PRED ZW=F: 365.30 → 509.60 (+39.50%)
+[17:54:51] OK SPY: $365.30 → $460.66
+[17:54:51] PRED ZW=F: 4075.40 → 687.09 (-83.14%)
+[17:54:51] OK ZW=F: $4075.40 → $687.09
+[17:55:52] PRED AAPL: 274.23 → 253.13 (-7.69%)
+[17:55:52] OK AAPL: $274.23 → $253.13
+[17:55:53] PRED TSLA: 403.36 → 382.38 (-5.20%)
+[17:55:53] OK TSLA: $403.36 → $382.38
+[17:55:54] PRED NVDA: 187.82 → 154.21 (-17.90%)
+[17:55:54] OK NVDA: $187.82 → $154.21
+[17:55:55] PRED MSFT: 506.55 → 490.52 (-3.17%)
+[17:55:55] OK MSFT: $506.55 → $490.52
+[17:55:55] PRED GOOGL: 277.21 → 199.62 (-27.99%)
+[17:55:55] OK GOOGL: $277.21 → $199.62
+[17:55:56] PRED PLTR: 174.91 → 125.50 (-28.25%)
+[17:55:56] OK PLTR: $174.91 → $125.50
+[17:55:57] PRED MSTR: 204.70 → 193.14 (-5.65%)
+[17:55:57] OK MSTR: $204.70 → $193.14
+[17:55:57] PRED COIN: 286.72 → 284.21 (-0.88%)
+[17:55:57] OK COIN: $286.72 → $284.21
+[17:55:58] PRED ZC=F: 442.00 → 442.35 (+0.08%)
+[17:55:58] OK ZC=F: $442.00 → $442.35
+[17:55:59] PRED GC=F: 4076.40 → 3353.16 (-17.74%)
+[17:55:59] OK GC=F: $4076.40 → $3353.16
+[17:56:00] PRED KC=F: 365.45 → 359.37 (-1.66%)
+[17:56:00] OK KC=F: $365.45 → $359.37
+[17:56:01] PRED CL=F: 60.24 → 60.76 (+0.86%)
+[17:56:01] OK CL=F: $60.24 → $60.76
+[17:56:02] PRED SPY: 671.73 → 602.66 (-10.28%)
+[17:56:02] OK SPY: $671.73 → $602.66
+[17:56:02] PRED ZW=F: 552.50 → 553.53 (+0.19%)
+[17:56:02] OK ZW=F: $552.50 → $553.53
+[17:57:03] PRED AAPL: 274.10 → 253.13 (-7.65%)
+[17:57:03] OK AAPL: $274.10 → $253.13
+[17:57:04] PRED TSLA: 402.89 → 382.57 (-5.04%)
+[17:57:04] OK TSLA: $402.89 → $382.57
+[17:57:05] PRED NVDA: 187.91 → 154.21 (-17.94%)
+[17:57:05] OK NVDA: $187.91 → $154.21
+[17:57:06] PRED MSFT: 506.60 → 490.52 (-3.17%)
+[17:57:06] OK MSFT: $506.60 → $490.52
+[17:57:07] PRED GOOGL: 277.10 → 199.62 (-27.96%)
+[17:57:07] OK GOOGL: $277.10 → $199.62
+[17:57:07] PRED PLTR: 174.63 → 125.50 (-28.13%)
+[17:57:07] OK PLTR: $174.63 → $125.50
+[17:57:08] PRED MSTR: 204.89 → 193.14 (-5.74%)
+[17:57:08] OK MSTR: $204.89 → $193.14
+[17:57:09] PRED COIN: 286.99 → 284.00 (-1.04%)
+[17:57:09] OK COIN: $286.99 → $284.00
+[17:57:10] PRED ZC=F: 442.25 → 442.35 (+0.02%)
+[17:57:10] OK ZC=F: $442.25 → $442.35
+[17:57:11] PRED GC=F: 4082.10 → 3353.16 (-17.86%)
+[17:57:11] OK GC=F: $4082.10 → $3353.16
+[17:57:13] PRED KC=F: 365.05 → 359.06 (-1.64%)
+[17:57:13] OK KC=F: $365.05 → $359.06
+[17:57:15] PRED CL=F: 60.26 → 60.76 (+0.83%)
+[17:57:15] OK CL=F: $60.26 → $60.76
+[17:57:15] PRED SPY: 671.93 → 602.66 (-10.31%)
+[17:57:15] OK SPY: $671.93 → $602.66
+[17:57:17] PRED ZW=F: 553.00 → 553.68 (+0.12%)
+[17:57:17] OK ZW=F: $553.00 → $553.68
+[17:58:18] PRED AAPL: 274.05 → 253.13 (-7.63%)
+[17:58:18] OK AAPL: $274.05 → $253.13
+[17:58:19] PRED TSLA: 403.50 → 382.57 (-5.19%)
+[17:58:19] OK TSLA: $403.50 → $382.57
+[17:58:20] PRED NVDA: 188.15 → 154.21 (-18.04%)
+[17:58:20] OK NVDA: $188.15 → $154.21
+[17:58:20] PRED MSFT: 507.08 → 490.52 (-3.27%)
+[17:58:20] OK MSFT: $507.08 → $490.52
+[17:58:21] PRED GOOGL: 277.12 → 199.62 (-27.96%)
+[17:58:21] OK GOOGL: $277.12 → $199.62
+[17:58:22] PRED PLTR: 174.94 → 125.50 (-28.26%)
+[17:58:22] OK PLTR: $174.94 → $125.50
+[17:58:23] PRED MSTR: 204.74 → 193.14 (-5.67%)
+[17:58:23] OK MSTR: $204.74 → $193.14
+[17:58:23] PRED COIN: 287.30 → 284.00 (-1.15%)
+[17:58:24] OK COIN: $287.30 → $284.00
+[17:58:24] PRED ZC=F: 441.75 → 442.35 (+0.14%)
+[17:58:24] OK ZC=F: $441.75 → $442.35
+[17:58:25] PRED GC=F: 4092.30 → 3353.16 (-18.06%)
+[17:58:25] OK GC=F: $4092.30 → $3353.16
+[17:58:26] PRED KC=F: 365.55 → 359.37 (-1.69%)
+[17:58:26] OK KC=F: $365.55 → $359.37
+[17:58:27] PRED CL=F: 60.18 → 60.76 (+0.96%)
+[17:58:27] OK CL=F: $60.18 → $60.76
+[17:58:28] PRED SPY: 672.00 → 602.66 (-10.32%)
+[17:58:28] OK SPY: $672.00 → $602.66
+[17:58:29] PRED ZW=F: 552.75 → 553.98 (+0.22%)
+[17:58:29] OK ZW=F: $552.75 → $553.98
+[17:59:30] PRED AAPL: 274.11 → 253.13 (-7.65%)
+[17:59:30] OK AAPL: $274.11 → $253.13
+[17:59:31] PRED TSLA: 404.56 → 383.21 (-5.28%)
+[17:59:31] OK TSLA: $404.56 → $383.21
+[17:59:31] PRED NVDA: 188.36 → 154.21 (-18.13%)
+[17:59:31] OK NVDA: $188.36 → $154.21
+[17:59:32] PRED MSFT: 506.90 → 490.52 (-3.23%)
+[17:59:32] OK MSFT: $506.90 → $490.52
+[17:59:33] PRED GOOGL: 277.30 → 199.62 (-28.01%)
+[17:59:33] OK GOOGL: $277.30 → $199.62
+[17:59:34] PRED PLTR: 174.90 → 125.50 (-28.25%)
+[17:59:34] OK PLTR: $174.90 → $125.50
+[17:59:35] PRED MSTR: 203.57 → 193.14 (-5.12%)
+[17:59:35] OK MSTR: $203.57 → $193.14
+[17:59:36] PRED COIN: 286.20 → 283.82 (-0.83%)
+[17:59:36] OK COIN: $286.20 → $283.82
+[17:59:36] PRED ZC=F: 442.00 → 442.42 (+0.10%)
+[17:59:36] OK ZC=F: $442.00 → $442.42
+[17:59:37] PRED GC=F: 4092.60 → 3353.16 (-18.07%)
+[17:59:37] OK GC=F: $4092.60 → $3353.16
+[17:59:38] PRED KC=F: 366.10 → 359.37 (-1.84%)
+[17:59:38] OK KC=F: $366.10 → $359.37
+[17:59:38] PRED CL=F: 60.21 → 60.76 (+0.91%)
+[17:59:38] OK CL=F: $60.21 → $60.76
+[17:59:39] PRED SPY: 671.93 → 602.66 (-10.31%)
+[17:59:39] OK SPY: $671.93 → $602.66
+[17:59:40] PRED ZW=F: 538.50 → 537.57 (-0.17%)
+[17:59:40] OK ZW=F: $538.50 → $537.57
+[18:00:52] ALPHA ORACLE v8.0 — LIVE
+[18:00:55] PRED ERR AAPL: 'DataFrame' object has no attribute 'item'
+[18:00:55] PRED ERR AAPL: 'DataFrame' object has no attribute 'item'
+[18:00:55] ERR AAPL: 'DataFrame' object has no attribute 'item'
+[18:00:55] PRED ERR TSLA: 'DataFrame' object has no attribute 'item'
+[18:00:55] ERR TSLA: 'DataFrame' object has no attribute 'item'
+[18:00:56] PRED ERR NVDA: 'DataFrame' object has no attribute 'item'
+[18:00:56] ERR NVDA: 'DataFrame' object has no attribute 'item'
+[18:00:56] PRED ERR MSFT: 'DataFrame' object has no attribute 'item'
+[18:00:56] ERR MSFT: 'DataFrame' object has no attribute 'item'
+[18:00:58] PRED ERR GOOGL: 'DataFrame' object has no attribute 'item'
+[18:00:58] ERR GOOGL: 'DataFrame' object has no attribute 'item'
+[18:00:59] PRED ERR PLTR: 'DataFrame' object has no attribute 'item'
+[18:00:59] ERR PLTR: 'DataFrame' object has no attribute 'item'
+[18:01:00] PRED ERR MSTR: 'DataFrame' object has no attribute 'item'
+[18:01:00] ERR MSTR: 'DataFrame' object has no attribute 'item'
+[18:01:00] PRED ERR COIN: 'DataFrame' object has no attribute 'item'
+[18:01:00] ERR COIN: 'DataFrame' object has no attribute 'item'
+[18:01:02] PRED ERR ZC=F: 'DataFrame' object has no attribute 'item'
+[18:01:02] ERR ZC=F: 'DataFrame' object has no attribute 'item'
+[18:01:02] PRED ERR GC=F: 'DataFrame' object has no attribute 'item'
+[18:01:02] ERR GC=F: 'DataFrame' object has no attribute 'item'
+[18:01:04] PRED ERR KC=F: 'DataFrame' object has no attribute 'item'
+[18:01:04] ERR KC=F: 'DataFrame' object has no attribute 'item'
+[18:01:04] PRED ERR CL=F: 'DataFrame' object has no attribute 'item'
+[18:01:04] ERR CL=F: 'DataFrame' object has no attribute 'item'
+[18:01:05] PRED ERR SPY: 'DataFrame' object has no attribute 'item'
+[18:01:05] ERR SPY: 'DataFrame' object has no attribute 'item'
+[18:01:06] PRED ERR ZW=F: 'DataFrame' object has no attribute 'item'
+[18:01:06] ERR ZW=F: 'DataFrame' object has no attribute 'item'
+[18:04:16] ALPHA ORACLE v8.1 — LIVE
+[18:04:17] PRED ERR AAPL: unsupported format string passed to Series.__format__
+[18:04:17] PRED ERR AAPL: unsupported format string passed to Series.__format__
+[18:04:18] PRED ERR TSLA: unsupported format string passed to Series.__format__
+[18:04:18] PRED ERR TSLA: unsupported format string passed to Series.__format__
+[18:04:19] PRED ERR NVDA: unsupported format string passed to Series.__format__
+[18:04:19] PRED ERR NVDA: unsupported format string passed to Series.__format__
+[18:04:20] PRED ERR MSFT: unsupported format string passed to Series.__format__
+[18:04:20] PRED ERR MSFT: unsupported format string passed to Series.__format__
+[18:04:20] PRED ERR GOOGL: unsupported format string passed to Series.__format__
+[18:04:21] PRED ERR GOOGL: unsupported format string passed to Series.__format__
+[18:04:21] PRED ERR PLTR: unsupported format string passed to Series.__format__
+[18:04:21] PRED ERR PLTR: unsupported format string passed to Series.__format__
+[18:04:21] PRED ERR MSTR: unsupported format string passed to Series.__format__
+[18:04:21] PRED ERR MSTR: unsupported format string passed to Series.__format__
+[18:04:22] PRED ERR COIN: unsupported format string passed to Series.__format__
+[18:04:22] PRED ERR COIN: unsupported format string passed to Series.__format__
+[18:04:22] PRED ERR ZC=F: unsupported format string passed to Series.__format__
+[18:04:22] PRED ERR ZC=F: unsupported format string passed to Series.__format__
+[18:04:23] PRED ERR GC=F: unsupported format string passed to Series.__format__
+[18:04:23] PRED ERR GC=F: unsupported format string passed to Series.__format__
+[18:04:23] PRED ERR KC=F: unsupported format string passed to Series.__format__
+[18:04:23] PRED ERR KC=F: unsupported format string passed to Series.__format__
+[18:04:23] PRED ERR CL=F: unsupported format string passed to Series.__format__
+[18:04:24] PRED ERR CL=F: unsupported format string passed to Series.__format__
+[18:04:24] PRED ERR SPY: unsupported format string passed to Series.__format__
+[18:04:24] PRED ERR SPY: unsupported format string passed to Series.__format__
+[18:04:25] PRED ERR ZW=F: unsupported format string passed to Series.__format__
+[18:04:25] PRED ERR ZW=F: unsupported format string passed to Series.__format__
+[18:05:25] PRED ERR AAPL: unsupported format string passed to Series.__format__
+[18:05:26] PRED ERR TSLA: unsupported format string passed to Series.__format__
+[18:05:27] PRED ERR NVDA: unsupported format string passed to Series.__format__
+[18:05:28] PRED ERR MSFT: unsupported format string passed to Series.__format__
+[18:05:29] PRED ERR GOOGL: unsupported format string passed to Series.__format__
+[18:05:30] PRED ERR PLTR: unsupported format string passed to Series.__format__
+[18:05:31] PRED ERR MSTR: unsupported format string passed to Series.__format__
+[18:05:32] PRED ERR COIN: unsupported format string passed to Series.__format__
+[18:05:33] PRED ERR ZC=F: unsupported format string passed to Series.__format__
+[18:05:35] PRED ERR GC=F: unsupported format string passed to Series.__format__
+[18:05:36] PRED ERR KC=F: unsupported format string passed to Series.__format__
+[18:05:36] PRED ERR CL=F: unsupported format string passed to Series.__format__
+[18:05:37] PRED ERR SPY: unsupported format string passed to Series.__format__
+[18:05:38] PRED ERR ZW=F: unsupported format string passed to Series.__format__
+[18:16:03] ALPHA ORACLE v9.0 — LIVE PRICES ENABLED
+[18:16:19] ERR SPY: Cannot set a DataFrame with multiple columns to the single column ma7
+[18:26:18] ALPHA ORACLE v9.1 — LIVE PRICES @ 5s
+[18:59:28] ALPHA ORACLE v9.2 — LIVE COLUMN UPDATING

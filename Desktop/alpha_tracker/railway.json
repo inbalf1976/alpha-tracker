@@ -1,0 +1,6 @@
+{
+  "build": {
+    "builder": "paketobuildpacks/builder:base"
+  },
+  "startCommand": "streamlit run dashboard.py --server.enableCORS false --server.port $PORT"
+}
