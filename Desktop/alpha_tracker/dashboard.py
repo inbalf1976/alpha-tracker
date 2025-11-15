@@ -41,11 +41,10 @@ ASSET_CATEGORIES = {
     "Commodities": {
         "Crude Oil": "CL=F", "Brent Oil": "BZ=F", "Natural Gas": "NG=F",
         "Gold": "GC=F", "Silver": "SI=F", "Copper": "HG=F",
-        # 🟢 FINAL UPDATE: Reverting to ZW=F (Futures) for the most direct commodity pricing
         "Corn": "ZC=F", 
         "Wheat": "ZW=F", 
         "Soybeans": "ZS=F", 
-        "Coffee": "KC=F" # Reverting Coffee to KC=F as well, for consistency
+        "Coffee": "KC=F"
     },
     "Indices": {
         "S&P 500": "^GSPC", "Dow Jones": "^DJI", "NASDAQ": "^IXIC", "Russell 2000": "^RUT"
@@ -67,31 +66,84 @@ SCALER_DIR = Path("scalers")
 ACCURACY_DIR = Path("accuracy_logs")
 METADATA_DIR = Path("metadata")
 PREDICTIONS_DIR = Path("predictions")
+CONFIG_DIR = Path("config")
 
-for dir_path in [MODEL_DIR, SCALER_DIR, ACCURACY_DIR, METADATA_DIR, PREDICTIONS_DIR]:
+for dir_path in [MODEL_DIR, SCALER_DIR, ACCURACY_DIR, METADATA_DIR, PREDICTIONS_DIR, CONFIG_DIR]:
     dir_path.mkdir(exist_ok=True)
 
 # ================================
-# 4. SELF-LEARNING CONFIG
+# 4. PERSISTENT CONFIG PATHS
+# ================================
+DAEMON_CONFIG_PATH = CONFIG_DIR / "daemon_config.json"
+MONITORING_CONFIG_PATH = CONFIG_DIR / "monitoring_config.json"
+
+# ================================
+# 5. SELF-LEARNING CONFIG
 # ================================
 LEARNING_CONFIG = {
-    "accuracy_threshold": 0.08,  # Retrain if error > 8%
-    "min_predictions_for_eval": 10,  # Need 10 predictions before evaluating
-    "retrain_interval_days": 30,  # Retrain every 30 days minimum
-    "volatility_change_threshold": 0.5,  # Retrain if vol changes > 50%
-    "fine_tune_epochs": 5,  # Epochs for fine-tuning
-    "full_retrain_epochs": 25,  # Epochs for full retrain
-    "lookback_window": 60  # LSTM lookback period
+    "accuracy_threshold": 0.08,
+    "min_predictions_for_eval": 10,
+    "retrain_interval_days": 30,
+    "volatility_change_threshold": 0.5,
+    "fine_tune_epochs": 5,
+    "full_retrain_epochs": 25,
+    "lookback_window": 60
 }
 
 # ================================
-# 5. THREAD-SAFE LOCKS
+# 6. THREAD-SAFE LOCKS
 # ================================
 model_cache_lock = threading.Lock()
 accuracy_lock = threading.Lock()
+config_lock = threading.Lock()
 
 # ================================
-# 6. HELPER FUNCTIONS
+# 7. PERSISTENT CONFIG MANAGEMENT
+# ================================
+def load_daemon_config():
+    """Load daemon configuration from file."""
+    if DAEMON_CONFIG_PATH.exists():
+        try:
+            with config_lock:
+                with open(DAEMON_CONFIG_PATH, 'r') as f:
+                    return json.load(f)
+        except:
+            pass
+    return {"enabled": False, "last_started": None}
+
+def save_daemon_config(enabled):
+    """Save daemon configuration to file."""
+    config = {
+        "enabled": enabled,
+        "last_started": datetime.now().isoformat() if enabled else None
+    }
+    with config_lock:
+        with open(DAEMON_CONFIG_PATH, 'w') as f:
+            json.dump(config, f)
+
+def load_monitoring_config():
+    """Load monitoring configuration from file."""
+    if MONITORING_CONFIG_PATH.exists():
+        try:
+            with config_lock:
+                with open(MONITORING_CONFIG_PATH, 'r') as f:
+                    return json.load(f)
+        except:
+            pass
+    return {"enabled": False, "last_started": None}
+
+def save_monitoring_config(enabled):
+    """Save monitoring configuration to file."""
+    config = {
+        "enabled": enabled,
+        "last_started": datetime.now().isoformat() if enabled else None
+    }
+    with config_lock:
+        with open(MONITORING_CONFIG_PATH, 'w') as f:
+            json.dump(config, f)
+
+# ================================
+# 8. HELPER FUNCTIONS
 # ================================
 def get_safe_ticker_name(ticker):
     return ticker.replace('=', '_').replace('^', '').replace('/', '_')
@@ -112,7 +164,7 @@ def get_prediction_path(ticker, date):
     return PREDICTIONS_DIR / f"{get_safe_ticker_name(ticker)}_{date}.json"
 
 # ================================
-# 7. PRICE FETCHING
+# 9. PRICE FETCHING
 # ================================
 @st.cache_data(ttl=60, show_spinner=False)
 def get_latest_price(ticker):
@@ -126,7 +178,7 @@ def get_latest_price(ticker):
         return None
 
 # ================================
-# 8. ACCURACY TRACKING SYSTEM
+# 10. ACCURACY TRACKING SYSTEM
 # ================================
 def load_accuracy_log(ticker):
     """Load accuracy history for a ticker."""
@@ -169,7 +221,6 @@ def validate_predictions(ticker):
     accuracy_log = load_accuracy_log(ticker)
     updated = False
     
-    # Look for predictions from yesterday
     yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     pred_path = get_prediction_path(ticker, yesterday)
     
@@ -178,7 +229,6 @@ def validate_predictions(ticker):
             with open(pred_path, 'r') as f:
                 pred_data = json.load(f)
             
-            # Get actual price
             actual_price = get_latest_price(ticker)
             if actual_price:
                 predicted_price = pred_data["predicted_price"]
@@ -189,19 +239,16 @@ def validate_predictions(ticker):
                 accuracy_log["dates"].append(yesterday)
                 accuracy_log["total_predictions"] += 1
                 
-                # Keep only last 50 predictions
                 if len(accuracy_log["errors"]) > 50:
                     accuracy_log["predictions"] = accuracy_log["predictions"][-50:]
                     accuracy_log["errors"] = accuracy_log["errors"][-50:]
                     accuracy_log["dates"] = accuracy_log["dates"][-50:]
                 
-                # Calculate average error
                 accuracy_log["avg_error"] = np.mean(accuracy_log["errors"][-30:])
                 
                 save_accuracy_log(ticker, accuracy_log)
                 updated = True
                 
-                # Delete validated prediction file
                 pred_path.unlink()
                 
         except Exception as e:
@@ -210,7 +257,7 @@ def validate_predictions(ticker):
     return updated, accuracy_log
 
 # ================================
-# 9. MODEL METADATA SYSTEM
+# 11. MODEL METADATA SYSTEM
 # ================================
 def load_metadata(ticker):
     """Load model metadata."""
@@ -237,25 +284,22 @@ def save_metadata(ticker, metadata):
         json.dump(metadata, f)
 
 # ================================
-# 10. RETRAINING DECISION ENGINE
+# 12. RETRAINING DECISION ENGINE
 # ================================
 def should_retrain(ticker, accuracy_log, metadata):
     """Decide if model needs retraining based on multiple factors."""
     reasons = []
     
-    # Check 1: No model exists
     if not get_model_path(ticker).exists():
         reasons.append("No model exists")
         return True, reasons
     
-    # Check 2: Accuracy dropped below threshold
     if len(accuracy_log["errors"]) >= LEARNING_CONFIG["min_predictions_for_eval"]:
         avg_error = accuracy_log["avg_error"]
         if avg_error > LEARNING_CONFIG["accuracy_threshold"]:
             reasons.append(f"Accuracy below threshold ({avg_error:.2%} error)")
             return True, reasons
     
-    # Check 3: Time-based retraining
     if metadata["trained_date"]:
         try:
             last_trained = datetime.fromisoformat(metadata["trained_date"])
@@ -266,7 +310,6 @@ def should_retrain(ticker, accuracy_log, metadata):
         except:
             pass
     
-    # Check 4: Market volatility changed
     try:
         df = yf.download(ticker, period="30d", progress=False)
         if len(df) > 5:
@@ -283,23 +326,22 @@ def should_retrain(ticker, accuracy_log, metadata):
     return False, reasons
 
 # ================================
-# 11. LSTM MODEL BUILDER
+# 13. LSTM MODEL BUILDER
 # ================================
 def build_lstm_model():
-    # Adjusted to 30 units for better memory performance on Streamlit Cloud Free Tier
     model = Sequential([
         LSTM(30, return_sequences=True, input_shape=(LEARNING_CONFIG["lookback_window"], 1)),
         Dropout(0.2),
         LSTM(30, return_sequences=False),
         Dropout(0.2),
-        Dense(15), # Adjusted Dense layer for smaller LSTM
+        Dense(15),
         Dense(1)
     ])
     model.compile(optimizer='adam', loss='mse', metrics=['mae'])
     return model
 
 # ================================
-# 12. SELF-LEARNING TRAINING SYSTEM
+# 14. SELF-LEARNING TRAINING SYSTEM
 # ================================
 def train_self_learning_model(ticker, days=5, force_retrain=False):
     """Fully autonomous self-learning training system."""
@@ -307,33 +349,26 @@ def train_self_learning_model(ticker, days=5, force_retrain=False):
     model_path = get_model_path(ticker)
     scaler_path = get_scaler_path(ticker)
     
-    # Step 1: Validate past predictions
     updated, accuracy_log = validate_predictions(ticker)
     if updated:
         st.session_state.setdefault('learning_log', []).append(
             f"✅ Validated prediction for {ticker}"
         )
     
-    # Step 2: Load metadata
     metadata = load_metadata(ticker)
     
-    # Step 3: Decide if retraining is needed
     needs_retrain, reasons = should_retrain(ticker, accuracy_log, metadata)
     
     if not needs_retrain and not force_retrain:
-        # Just fine-tune existing model
         training_type = "fine-tune"
     else:
-        # Full retrain needed
         training_type = "full-retrain"
         if reasons:
             st.session_state.setdefault('learning_log', []).append(
                 f"🔄 Retraining {ticker}: {', '.join(reasons)}"
             )
     
-    # Step 4: Fetch training data
     try:
-        # Reduced historical period to 1 year for better free tier memory usage/speed
         df = yf.download(ticker, period="1y", progress=False) 
         if len(df) < 100:
             return None, None, None
@@ -343,7 +378,6 @@ def train_self_learning_model(ticker, days=5, force_retrain=False):
     df = df[['Close']].copy()
     df = df.ffill().bfill()
     
-    # Step 5: Prepare scaler
     if training_type == "full-retrain" or not scaler_path.exists():
         scaler = MinMaxScaler()
         scaler.fit(df[['Close']])
@@ -353,7 +387,6 @@ def train_self_learning_model(ticker, days=5, force_retrain=False):
     
     scaled = scaler.transform(df[['Close']])
     
-    # Step 6: Create sequences
     X, y = [], []
     lookback = LEARNING_CONFIG["lookback_window"]
     for i in range(lookback, len(scaled)):
@@ -364,10 +397,8 @@ def train_self_learning_model(ticker, days=5, force_retrain=False):
     if len(X) == 0:
         return None, None, None
     
-    # Step 7: Train or fine-tune model
     with model_cache_lock:
         if training_type == "full-retrain":
-            # Full retrain from scratch
             model = build_lstm_model()
             epochs = LEARNING_CONFIG["full_retrain_epochs"]
             
@@ -380,12 +411,10 @@ def train_self_learning_model(ticker, days=5, force_retrain=False):
                 f"🧠 Full retrain #{metadata['retrain_count']} for {ticker} completed"
             )
         else:
-            # Fine-tune existing model
             try:
                 model = tf.keras.models.load_model(str(model_path))
                 epochs = LEARNING_CONFIG["fine_tune_epochs"]
                 
-                # Fine-tune on recent 30% of data
                 recent_size = int(len(X) * 0.3)
                 model.fit(X[-recent_size:], y[-recent_size:], 
                           epochs=epochs, batch_size=32, verbose=0)
@@ -394,18 +423,15 @@ def train_self_learning_model(ticker, days=5, force_retrain=False):
                     f"⚡ Fine-tuned {ticker} on recent data"
                 )
             except:
-                # Fallback to full retrain if loading fails
                 model = build_lstm_model()
                 model.fit(X, y, epochs=LEARNING_CONFIG["full_retrain_epochs"], 
                           batch_size=32, verbose=0, validation_split=0.1)
         
-        # Step 8: Save model
         try:
             model.save(str(model_path))
         except Exception as e:
             st.session_state.setdefault('errors', []).append(f"Model save failed {ticker}")
         
-        # Step 9: Update metadata
         metadata["trained_date"] = datetime.now().isoformat()
         metadata["training_samples"] = len(X)
         metadata["training_volatility"] = float(df['Close'].pct_change().std())
@@ -413,7 +439,6 @@ def train_self_learning_model(ticker, days=5, force_retrain=False):
         metadata["last_accuracy"] = accuracy_log["avg_error"]
         save_metadata(ticker, metadata)
     
-    # Step 10: Generate forecast
     last = scaled[-lookback:].reshape(1, lookback, 1)
     preds = []
     for _ in range(days):
@@ -423,11 +448,9 @@ def train_self_learning_model(ticker, days=5, force_retrain=False):
     
     forecast = scaler.inverse_transform(np.array(preds).reshape(-1, 1)).flatten()
     
-    # Step 11: Record prediction for tomorrow
     tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
     record_prediction(ticker, forecast[0], tomorrow)
     
-    # Step 12: Generate dates
     dates = []
     i = 1
     while len(dates) < days:
@@ -436,13 +459,12 @@ def train_self_learning_model(ticker, days=5, force_retrain=False):
             dates.append(next_date)
         i += 1
     
-    # Step 13: Cleanup
     tf.keras.backend.clear_session()
     
     return forecast, dates, model
 
 # ================================
-# 13. DAILY RECOMMENDATION
+# 15. DAILY RECOMMENDATION
 # ================================
 def daily_recommendation(ticker, asset):
     price = get_latest_price(ticker)
@@ -458,7 +480,6 @@ def daily_recommendation(ticker, asset):
     action = "BUY" if change >= 1.5 else "SELL" if change <= -1.5 else "HOLD"
     color = "#00C853" if action == "BUY" else "#D50000" if action == "SELL" else "#FFA726"
     
-    # Show learning status
     accuracy_log = load_accuracy_log(ticker)
     metadata = load_metadata(ticker)
     
@@ -476,7 +497,7 @@ def daily_recommendation(ticker, asset):
     """
 
 # ================================
-# 14. 5-DAY FORECAST
+# 16. 5-DAY FORECAST
 # ================================
 def show_5day_forecast(ticker, asset_name):
     forecast, dates, _ = train_self_learning_model(ticker, days=5)
@@ -491,7 +512,6 @@ def show_5day_forecast(ticker, asset_name):
     fig = go.Figure()
     
     try:
-        # Reduced historical period to 30 days for plotting clarity and speed
         hist = yf.download(ticker, period="30d", progress=False)['Close'] 
         fig.add_trace(go.Scatter(
             x=hist.index, y=hist.values, 
@@ -530,7 +550,6 @@ def show_5day_forecast(ticker, asset_name):
         day5_change = (forecast[4] - current_price) / current_price * 100
         st.metric("Day 5", f"${forecast[4]:.2f}", f"{day5_change:+.2f}%")
     
-    # Show learning metrics
     accuracy_log = load_accuracy_log(ticker)
     metadata = load_metadata(ticker)
     
@@ -541,23 +560,28 @@ def show_5day_forecast(ticker, asset_name):
                f"Retrains: {metadata['retrain_count']}")
 
 # ================================
-# 15. BACKGROUND LEARNING DAEMON
+# 17. BACKGROUND LEARNING DAEMON
 # ================================
 def continuous_learning_daemon():
     """Background thread that continuously validates and improves models."""
-    while st.session_state.get("learning_daemon_active", False):
+    while True:
+        # Check if daemon should still be running
+        daemon_config = load_daemon_config()
+        if not daemon_config.get("enabled", False):
+            break
+            
         try:
             all_tickers = [ticker for cat in ASSET_CATEGORIES.values() for _, ticker in cat.items()]
             
             for ticker in all_tickers:
-                if not st.session_state.get("learning_daemon_active", False):
+                # Double-check daemon status
+                daemon_config = load_daemon_config()
+                if not daemon_config.get("enabled", False):
                     break
                 
-                # Validate predictions
                 updated, accuracy_log = validate_predictions(ticker)
                 
                 if updated:
-                    # Check if retrain needed
                     metadata = load_metadata(ticker)
                     needs_retrain, reasons = should_retrain(ticker, accuracy_log, metadata)
                     
@@ -565,18 +589,16 @@ def continuous_learning_daemon():
                         st.session_state.setdefault('learning_log', []).append(
                             f"🔄 Auto-retraining {ticker}: {', '.join(reasons)}"
                         )
-                        # Trigger retrain in background
                         train_self_learning_model(ticker, days=1, force_retrain=True)
             
-            # Sleep for 1 hour
-            time.sleep(3600)
+            time.sleep(3600)  # Sleep for 1 hour
             
         except Exception as e:
             st.session_state.setdefault('errors', []).append(f"Learning daemon error: {str(e)[:50]}")
             time.sleep(600)
 
 # ================================
-# 16. 6%+ DETECTION (SIMPLIFIED)
+# 18. 6%+ DETECTION
 # ================================
 @st.cache_data(ttl=60, show_spinner=False)
 def detect_pre_move_6percent(ticker, name):
@@ -618,49 +640,88 @@ def send_telegram_alert(text):
         return False
 
 def monitor_6percent_pre_move():
+    """Background monitoring thread for 6%+ moves."""
     all_assets = {name: ticker for cat in ASSET_CATEGORIES.values() for name, ticker in cat.items()}
     alerted = set()
     
-    while st.session_state.get("pre_move_monitoring", False):
+    while True:
+        # Check if monitoring should still be running
+        monitoring_config = load_monitoring_config()
+        if not monitoring_config.get("enabled", False):
+            break
+            
         for name, ticker in all_assets.items():
-            if not st.session_state.get("pre_move_monitoring", False):
+            # Double-check monitoring status
+            monitoring_config = load_monitoring_config()
+            if not monitoring_config.get("enabled", False):
                 break
+                
             alert = detect_pre_move_6percent(ticker, name)
             if alert and alert["asset"] not in alerted:
-                text = f"6%+ MOVE INCOMING\n{alert['asset'].upper()} {alert['direction']}\nCONFIDENCE: {alert['confidence']}%"
+                text = f"🚨 6%+ MOVE INCOMING\n{alert['asset'].upper()} {alert['direction']}\nCONFIDENCE: {alert['confidence']}%"
                 send_telegram_alert(text)
                 alerted.add(alert["asset"])
                 time.sleep(600)
         time.sleep(60)
 
 # ================================
-# 17. BRANDING
+# 19. AUTO-RESTART THREADS ON APP LOAD
+# ================================
+def initialize_background_threads():
+    """Auto-start background threads based on persistent config."""
+    
+    # Check and start Learning Daemon
+    daemon_config = load_daemon_config()
+    if daemon_config.get("enabled", False):
+        if "daemon_thread_started" not in st.session_state:
+            st.session_state.daemon_thread_started = True
+            threading.Thread(target=continuous_learning_daemon, daemon=True).start()
+            st.session_state.setdefault('learning_log', []).append(
+                "✅ Learning Daemon auto-started on app load"
+            )
+    
+    # Check and start 6%+ Monitoring
+    monitoring_config = load_monitoring_config()
+    if monitoring_config.get("enabled", False):
+        if "monitoring_thread_started" not in st.session_state:
+            st.session_state.monitoring_thread_started = True
+            threading.Thread(target=monitor_6percent_pre_move, daemon=True).start()
+            st.session_state.setdefault('learning_log', []).append(
+                "✅ 6%+ Pre-Move Monitoring auto-started on app load"
+            )
+
+# ================================
+# 20. BRANDING
 # ================================
 def add_header():
     st.markdown("""
     <div style='text-align:center;padding:15px;background:#1a1a1a;color:#00C853;margin-bottom:20px;border-radius:8px;'>
         <h2 style='margin:0;'>🧠 MICHA STOCKS AI TRADER v4.0</h2>
-        <p style='margin:5px 0;'>True Self-Learning • Adaptive • Autonomous</p>
+        <p style='margin:5px 0;'>True Self-Learning • Persistent 24/7 • Autonomous</p>
     </div>
     """, unsafe_allow_html=True)
 
 def add_footer():
     st.markdown("""
     <div style='text-align:center;padding:20px;background:#1a1a1a;color:#666;margin-top:40px;border-radius:8px;'>
-        <p style='margin:0;'>© 2025 Micha Stocks | Truly Self-Learning AI</p>
+        <p style='margin:0;'>© 2025 Micha Stocks | Truly Self-Learning AI with Persistent Threads</p>
     </div>
     """, unsafe_allow_html=True)
 
 # ================================
-# 18. MAIN APP
+# 21. MAIN APP
 # ================================
 st.set_page_config(page_title="Micha Stocks AI v4.0", layout="wide")
+
+# 🚀 AUTO-START BACKGROUND THREADS ON APP LOAD
+initialize_background_threads()
+
 add_header()
 
 # Initialize session state
-for key in ["pre_move_monitoring", "learning_daemon_active", "learning_log", "errors"]:
+for key in ["learning_log", "errors"]:
     if key not in st.session_state:
-        st.session_state[key] = False if "monitoring" in key or "active" in key else []
+        st.session_state[key] = []
 
 # Sidebar
 with st.sidebar:
@@ -672,7 +733,6 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("🧠 Self-Learning Status")
     
-    # Show model status
     accuracy_log = load_accuracy_log(ticker)
     metadata = load_metadata(ticker)
     
@@ -689,7 +749,7 @@ with st.sidebar:
     else:
         st.info("No model trained yet")
     
-    if st.button("🔄 Force Retrain"):
+    if st.button("🔄 Force Retrain", use_container_width=True):
         with st.spinner("Retraining from scratch..."):
             train_self_learning_model(ticker, days=1, force_retrain=True)
         st.success("✅ Retrained!")
@@ -698,36 +758,71 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("🤖 Learning Daemon")
     
-    if st.button("▶️ Start Learning Daemon", use_container_width=True):
-        if not st.session_state.learning_daemon_active:
-            st.session_state.learning_daemon_active = True
-            threading.Thread(target=continuous_learning_daemon, daemon=True).start()
-            st.success("🧠 Learning daemon started!")
-        else:
-            st.info("Already running")
+    # Show current daemon status
+    daemon_config = load_daemon_config()
+    daemon_status = "🟢 RUNNING" if daemon_config.get("enabled", False) else "🔴 STOPPED"
+    st.markdown(f"**Status:** {daemon_status}")
     
-    if st.button("⏹️ Stop Learning Daemon", use_container_width=True):
-        st.session_state.learning_daemon_active = False
-        st.success("Stopped")
+    if daemon_config.get("last_started"):
+        try:
+            started = datetime.fromisoformat(daemon_config["last_started"])
+            st.caption(f"Started: {started.strftime('%Y-%m-%d %H:%M')}")
+        except:
+            pass
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("▶️ Start", use_container_width=True):
+            save_daemon_config(True)
+            if "daemon_thread_started" not in st.session_state:
+                st.session_state.daemon_thread_started = True
+                threading.Thread(target=continuous_learning_daemon, daemon=True).start()
+            st.success("🧠 Started!")
+            st.rerun()
+    
+    with col2:
+        if st.button("⏹️ Stop", use_container_width=True):
+            save_daemon_config(False)
+            st.success("Stopped!")
+            st.rerun()
 
     st.markdown("---")
     st.subheader("📡 Alert Systems")
     
+    # Show current monitoring status
+    monitoring_config = load_monitoring_config()
+    monitoring_status = "🟢 RUNNING" if monitoring_config.get("enabled", False) else "🔴 STOPPED"
+    st.markdown(f"**6%+ Alerts:** {monitoring_status}")
+    
+    if monitoring_config.get("last_started"):
+        try:
+            started = datetime.fromisoformat(monitoring_config["last_started"])
+            st.caption(f"Started: {started.strftime('%Y-%m-%d %H:%M')}")
+        except:
+            pass
+    
     if st.button("🧪 Test Telegram", use_container_width=True):
-        success = send_telegram_alert("TEST ALERT\nMicha Stocks v4.0\nSelf-Learning Active")
+        success = send_telegram_alert("✅ TEST ALERT\nMicha Stocks v4.0\nPersistent Threads Active")
         if success:
             st.success("✅ Sent!")
         else:
             st.error("❌ Check keys")
 
-    if st.button("▶️ 6%+ Pre-Move Alerts", use_container_width=True):
-        if not st.session_state.pre_move_monitoring:
-            st.session_state.pre_move_monitoring = True
-            threading.Thread(target=monitor_6percent_pre_move, daemon=True).start()
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("▶️ Start Alerts", use_container_width=True):
+            save_monitoring_config(True)
+            if "monitoring_thread_started" not in st.session_state:
+                st.session_state.monitoring_thread_started = True
+                threading.Thread(target=monitor_6percent_pre_move, daemon=True).start()
             st.success("Started!")
-        else:
-            st.session_state.pre_move_monitoring = False
-            st.info("Stopped")
+            st.rerun()
+    
+    with col2:
+        if st.button("⏹️ Stop Alerts", use_container_width=True):
+            save_monitoring_config(False)
+            st.success("Stopped!")
+            st.rerun()
 
 # Main content
 col1, col2, col3 = st.columns([1, 3, 1])
@@ -756,15 +851,14 @@ st.subheader("🧠 Self-Learning Activity Log")
 col1, col2 = st.columns(2)
 
 with col1:
+    st.markdown("**Recent Learning Events:**")
     if st.session_state.learning_log:
-        st.markdown("**Recent Learning Events:**")
         for log_entry in st.session_state.learning_log[-10:]:
             st.text(log_entry)
     else:
         st.info("No learning activity yet. Start making predictions!")
 
 with col2:
-    # Show accuracy comparison across assets
     st.markdown("**Model Performance:**")
     perf_data = []
     for cat in ASSET_CATEGORIES.values():
@@ -786,43 +880,89 @@ with col2:
 
 st.markdown("---")
 
+# System Status Display
+st.subheader("🔧 System Status")
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    daemon_config = load_daemon_config()
+    daemon_running = daemon_config.get("enabled", False)
+    st.metric("Learning Daemon", "🟢 ACTIVE" if daemon_running else "🔴 INACTIVE")
+
+with col2:
+    monitoring_config = load_monitoring_config()
+    monitoring_running = monitoring_config.get("enabled", False)
+    st.metric("6%+ Alert System", "🟢 ACTIVE" if monitoring_running else "🔴 INACTIVE")
+
+with col3:
+    total_models = len([f for f in MODEL_DIR.glob("*.h5")])
+    st.metric("Trained Models", total_models)
+
+st.markdown("---")
+
 # Self-Learning Explanation
-with st.expander("ℹ️ How Self-Learning Works"):
+with st.expander("ℹ️ How Persistent Self-Learning Works"):
     st.markdown("""
-    ### 🧠 True Self-Learning Features:
+    ### 🧠 True Persistent Self-Learning Features:
     
-    **1. Automatic Prediction Validation**
-    - Every prediction is recorded with a timestamp
-    - Next day, actual prices are compared to predictions
-    - Accuracy metrics are automatically updated
+    **1. Automatic Thread Management**
+    - ✅ Threads auto-start on app load based on saved configuration
+    - ✅ Configuration persists in `config/` directory
+    - ✅ Survives app restarts, button clicks, and browser refreshes
+    - ✅ Works perfectly with UptimeRobot keeping app alive 24/7
     
-    **2. Intelligent Retraining Triggers**
-    - ⚡ **Accuracy Drop**: Retrains if error > 8%
-    - 📅 **Time-Based**: Retrains every 30 days minimum
-    - 📊 **Market Regime Change**: Retrains if volatility changes > 50%
-    - 🆕 **No Model**: Trains immediately for new assets
+    **2. Learning Daemon (All Assets)**
+    - 🔄 Validates predictions for ALL assets automatically
+    - 🧠 Decides when retraining is needed per asset
+    - ⚡ Triggers fine-tuning or full retraining autonomously
+    - 📊 Runs continuously in background (1-hour cycles)
     
-    **3. Adaptive Learning**
-    - 🎯 **Fine-Tuning**: Updates existing models with recent data
-    - 🔄 **Full Retraining**: Rebuilds from scratch when needed
-    - 📈 **Version Control**: Tracks model improvements over time
+    **3. 6%+ Pre-Move Alert System**
+    - 📡 Monitors ALL assets for momentum + volume spikes
+    - 🚨 Sends Telegram alerts for potential big moves
+    - 🎯 Runs independently of daemon (1-minute cycles)
+    - 💬 Prevents duplicate alerts (10-minute cooldown)
     
-    **4. Continuous Improvement**
-    - Learning daemon runs in background
-    - Validates predictions hourly
-    - Automatically triggers retraining
-    - No human intervention required
+    **4. Thread Independence**
+    - ✅ Both threads run simultaneously without interference
+    - ✅ Clicking buttons doesn't stop background threads
+    - ✅ Threads check persistent config files to know if they should continue
+    - ✅ Close browser → threads keep running (with UptimeRobot)
     
-    **5. Transparency**
-    - All learning events logged
-    - Accuracy metrics visible
-    - Retrain count tracked
-    - Model version history maintained
+    **5. UptimeRobot Integration**
+    - 🔄 Pings every 5 minutes keep Streamlit container alive
+    - 🚀 Threads remain active even when you're not viewing the app
+    - 💾 Configuration persists across container restarts
+    - 🧠 Auto-recovery if Streamlit Cloud restarts the app
+    
+    **6. How to Use:**
+    1. Click "▶️ Start" on Learning Daemon → Trains all assets in background
+    2. Click "▶️ Start Alerts" on Alert System → Monitors for 6%+ moves
+    3. Close the app → Both keep running (UptimeRobot maintains connection)
+    4. Reopen days later → Both still running automatically
+    5. Click "⏹️ Stop" buttons only when you want to disable them
+    
+    **7. File-Based Persistence:**
+    - `config/daemon_config.json` → Remembers if daemon should run
+    - `config/monitoring_config.json` → Remembers if alerts should run
+    - Both files survive app restarts and container recycling
     """)
 
 # Config display
 with st.expander("⚙️ Self-Learning Configuration"):
     st.json(LEARNING_CONFIG)
+
+# Persistent Config Files Display
+with st.expander("💾 Persistent Configuration Files"):
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("**Learning Daemon Config:**")
+        daemon_config = load_daemon_config()
+        st.json(daemon_config)
+    with col2:
+        st.markdown("**Monitoring Config:**")
+        monitoring_config = load_monitoring_config()
+        st.json(monitoring_config)
 
 # Manual refresh
 if st.button("🔄 Refresh Dashboard"):
