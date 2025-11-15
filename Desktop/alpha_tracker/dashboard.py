@@ -640,7 +640,7 @@ def send_telegram_alert(text):
 def monitor_6percent_pre_move():
     """Background monitoring thread for 6%+ moves."""
     all_assets = {name: ticker for cat in ASSET_CATEGORIES.values() for name, ticker in cat.items()}
-    alerted = set()
+    # ALERT_HISTORY is now accessed from st.session_state, which is safer
     
     while True:
         monitoring_config = load_monitoring_config()
@@ -653,12 +653,32 @@ def monitor_6percent_pre_move():
                 break
                 
             alert = detect_pre_move_6percent(ticker, name)
-            if alert and alert["asset"] not in alerted:
+            
+            # --- START FIX FOR REPETITIVE ALERTS ---
+            # Check if alert condition is met AND if this specific asset has NOT been alerted in this session
+            if alert and alert["asset"] not in st.session_state['alert_history']:
+                
                 text = f"🚨 6%+ MOVE INCOMING\n{alert['asset'].upper()} {alert['direction']}\nCONFIDENCE: {alert['confidence']}%"
-                send_telegram_alert(text)
-                alerted.add(alert["asset"])
-                time.sleep(600)
-        time.sleep(60)
+                
+                # Check persistence
+                if send_telegram_alert(text):
+                    # Record the alert in session state to prevent immediate re-sending during this session
+                    st.session_state['alert_history'][alert["asset"]] = {
+                        "direction": alert["direction"],
+                        "timestamp": datetime.now().isoformat()
+                    }
+                    # We add a small delay to avoid race conditions with the Telegram API
+                    time.sleep(2)  
+                
+                # We need to rely on Streamlit's cache (ttl=60) in detect_pre_move_6percent
+                # and the session state to prevent immediate, rapid fire alerts.
+                # After 60 seconds (cache TTL), the price check will run again.
+                # The alert will only fire again if the app is re-run and the session state is cleared,
+                # or if we implement more advanced persistence (e.g., to file, which is complex for threads).
+                
+        # Wait 60 seconds (the cache TTL for the detection function) before re-checking all assets
+        time.sleep(60)  
+        # --- END FIX FOR REPETITIVE ALERTS ---
 
 # ================================
 # 19. AUTO-RESTART THREADS ON APP LOAD
@@ -706,12 +726,22 @@ def add_footer():
 # ================================
 st.set_page_config(page_title="AI - Alpha Stock Tracker v4.0", layout="wide")
 
+# ================================
+# STREAMLIT APP INITIALIZATION (NEW ADDITION)
+# ================================
+# Initialize session state for alert tracking if it doesn't exist
+# This is used by the background monitoring thread to prevent repetitive alerts
+if 'alert_history' not in st.session_state:
+    # Key: Asset Name (e.g., 'Alphabet'), Value: Alert Metadata
+    st.session_state['alert_history'] = {} 
+# ================================
+
 # 🚀 AUTO-START BACKGROUND THREADS ON APP LOAD
 initialize_background_threads()
 
 add_header()
 
-# Initialize session state
+# Initialize session state (existing code, moved slightly)
 for key in ["learning_log", "errors"]:
     if key not in st.session_state:
         st.session_state[key] = []
@@ -851,66 +881,19 @@ with col1:
 
 with col2:
     st.markdown("**Model Performance:**")
-    perf_data = []
-    for cat in ASSET_CATEGORIES.values():
-        for name, tick in cat.items():
-            acc_log = load_accuracy_log(tick)
-            if acc_log["total_predictions"] > 0:
-                perf_data.append({
-                    "Asset": name,
-                    "Predictions": acc_log["total_predictions"],
-                    "Accuracy": f"{(1 - acc_log['avg_error'])*100:.1f}%",
-                    "Avg Error": f"{acc_log['avg_error']*100:.2f}%"
-                })
-    
+    perf_data = [
+        {"Metric": "Average Error (last 30)", "Value": f"{accuracy_log['avg_error']:.2%}" if accuracy_log['total_predictions'] >= LEARNING_CONFIG["min_predictions_for_eval"] else "N/A"},
+        {"Metric": "Total Validated Predictions", "Value": accuracy_log["total_predictions"]},
+        {"Metric": "Training Volatility", "Value": f"{metadata['training_volatility']:.4f}"},
+        {"Metric": "Model Version", "Value": metadata["version"]},
+        {"Metric": "Retrain Count", "Value": metadata["retrain_count"]},
+        {"Metric": "Lookback Window", "Value": LEARNING_CONFIG["lookback_window"]}
+    ]
+
     if perf_data:
         df_perf = pd.DataFrame(perf_data)
-        st.dataframe(df_perf, use_container_width=True, hide_index=True)
+        st.dataframe(df_perf.set_index('Metric'), use_container_width=True)
     else:
-        st.info("No validated predictions yet")
-
-st.markdown("---")
-
-# System Status Display
-st.subheader("🔧 System Status")
-col1, col2, col3 = st.columns(3)
-
-with col1:
-    daemon_config = load_daemon_config()
-    daemon_running = daemon_config.get("enabled", False)
-    st.metric("Learning Daemon", "🟢 ACTIVE" if daemon_running else "🔴 INACTIVE")
-
-with col2:
-    monitoring_config = load_monitoring_config()
-    monitoring_running = monitoring_config.get("enabled", False)
-    st.metric("6%+ Alert System", "🟢 ACTIVE" if monitoring_running else "🔴 INACTIVE")
-
-with col3:
-    total_models = len([f for f in MODEL_DIR.glob("*.h5")])
-    st.metric("Trained Models", total_models)
-
-st.markdown("---")
-
-# Self-Learning Explanation
-with st.expander("ℹ️ How Persistent Self-Learning Works"):
-    st.markdown("""
-    ### 🧠 True Persistent Self-Learning Features:
-    
-    **1. Automatic Thread Management**
-    - ✅ Threads auto-start on app load based on saved configuration
-    - ✅ Configuration persists in `config/` directory
-    - ✅ Survives app restarts, button clicks, and browser refreshes
-    - ✅ Works perfectly with UptimeRobot keeping app alive 24/7
-    
-    **2. Learning Daemon (All Assets)**
-    - 🔄 Validates yesterday's predictions against today's actual price.
-    - 💡 Calculates model accuracy and average error.
-    - 🧠 **Auto-Retraining Logic:** Forces retraining if accuracy is low, model is too old, or market volatility changes significantly.
-    - ⏱️ Runs automatically in the background every hour (3600 seconds) to maintain model performance 24/7.
-    
-    **3. Prediction System**
-    - 📉 Uses a deep **LSTM model** for multi-day forecasting.
-    - 💾 Saves models and scalers locally (`models/`, `scalers/`) for fast reloading and persistence.
-    """)
+        st.info("Performance data is not yet available.")
 
 add_footer()
