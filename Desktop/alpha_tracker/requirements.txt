@@ -8,3 +8,5 @@ numpy
 pytelegrambotapi
 tensorflow
 keras
+plotly
+cufflinks  # Include this if your app uses it for data visualization
