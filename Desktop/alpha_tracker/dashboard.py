@@ -92,7 +92,9 @@ LEARNING_CONFIG = {
     "volatility_change_threshold": 0.5,
     "fine_tune_epochs": 5,
     "full_retrain_epochs": 25,
-    "lookback_window": 60
+    "lookback_window": 60,
+    "use_technical_indicators": True,  # ✅ NEW: Enable technical analysis
+    "feature_count": 5  # ✅ Price + RSI + MACD + Volume + Support/Resistance
 }
 
 # ================================
@@ -247,7 +249,80 @@ def get_latest_price(ticker):
         return None
 
 # ================================
-# 10. ACCURACY TRACKING SYSTEM
+# 10. TECHNICAL INDICATORS (✅ OPTION A - CONSERVATIVE)
+# ================================
+def calculate_rsi(prices, period=14):
+    """Calculate Relative Strength Index."""
+    delta = prices.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
+def calculate_macd(prices, fast=12, slow=26, signal=9):
+    """Calculate MACD (Moving Average Convergence Divergence)."""
+    ema_fast = prices.ewm(span=fast, adjust=False).mean()
+    ema_slow = prices.ewm(span=slow, adjust=False).mean()
+    macd = ema_fast - ema_slow
+    signal_line = macd.ewm(span=signal, adjust=False).mean()
+    return macd - signal_line  # Return MACD histogram
+
+def calculate_volume_change(volume):
+    """Calculate volume rate of change."""
+    return volume.pct_change()
+
+def find_support_resistance(prices, window=20):
+    """Find nearest support and resistance levels."""
+    # Find local minima (support) and maxima (resistance)
+    support_levels = []
+    resistance_levels = []
+    
+    for i in range(window, len(prices) - window):
+        # Check if it's a local minimum (support)
+        if prices.iloc[i] == prices.iloc[i-window:i+window].min():
+            support_levels.append(prices.iloc[i])
+        # Check if it's a local maximum (resistance)
+        if prices.iloc[i] == prices.iloc[i-window:i+window].max():
+            resistance_levels.append(prices.iloc[i])
+    
+    # Get most recent levels
+    nearest_support = max(support_levels[-3:]) if support_levels else prices.min()
+    nearest_resistance = min(resistance_levels[-3:]) if resistance_levels else prices.max()
+    
+    return nearest_support, nearest_resistance
+
+def calculate_distance_to_levels(current_price, support, resistance):
+    """Calculate normalized distance to support/resistance."""
+    distance_to_support = (current_price - support) / current_price
+    distance_to_resistance = (resistance - current_price) / current_price
+    return distance_to_support, distance_to_resistance
+
+def add_technical_indicators(df):
+    """Add technical indicators to dataframe - OPTION A (Conservative)."""
+    df = df.copy()
+    
+    # 1. RSI (Relative Strength Index)
+    df['RSI'] = calculate_rsi(df['Close'])
+    
+    # 2. MACD Histogram
+    df['MACD'] = calculate_macd(df['Close'])
+    
+    # 3. Volume Change
+    df['Volume_Change'] = calculate_volume_change(df['Volume'])
+    
+    # 4. Support/Resistance Distance
+    support, resistance = find_support_resistance(df['Close'])
+    df['Distance_Support'] = (df['Close'] - support) / df['Close']
+    df['Distance_Resistance'] = (resistance - df['Close']) / df['Close']
+    
+    # Fill NaN values
+    df = df.fillna(method='bfill').fillna(method='ffill')
+    
+    return df
+
+# ================================
+# 11. ACCURACY TRACKING SYSTEM
 # ================================
 def load_accuracy_log(ticker):
     """Load accuracy history for a ticker."""
@@ -326,7 +401,7 @@ def validate_predictions(ticker):
     return updated, accuracy_log
 
 # ================================
-# 11. MODEL METADATA SYSTEM
+# 12. MODEL METADATA SYSTEM
 # ================================
 def load_metadata(ticker):
     """Load model metadata."""
@@ -395,25 +470,26 @@ def should_retrain(ticker, accuracy_log, metadata):
     return False, reasons
 
 # ================================
-# 13. LSTM MODEL BUILDER
+# 14. LSTM MODEL BUILDER (✅ UPDATED FOR MULTI-FEATURE)
 # ================================
-def build_lstm_model():
+def build_lstm_model(feature_count=5):
+    """Build LSTM model - supports multiple features."""
     model = Sequential([
-        LSTM(30, return_sequences=True, input_shape=(LEARNING_CONFIG["lookback_window"], 1)),
+        LSTM(50, return_sequences=True, input_shape=(LEARNING_CONFIG["lookback_window"], feature_count)),
         Dropout(0.2),
-        LSTM(30, return_sequences=False),
+        LSTM(50, return_sequences=False),
         Dropout(0.2),
-        Dense(15),
+        Dense(25),
         Dense(1)
     ])
     model.compile(optimizer='adam', loss='mse', metrics=['mae'])
     return model
 
 # ================================
-# 14. SELF-LEARNING TRAINING SYSTEM
+# 15. SELF-LEARNING TRAINING SYSTEM (✅ ENHANCED WITH INDICATORS)
 # ================================
 def train_self_learning_model(ticker, days=5, force_retrain=False):
-    """Fully autonomous self-learning training system."""
+    """Fully autonomous self-learning training system with technical indicators."""
     
     model_path = get_model_path(ticker)
     scaler_path = get_scaler_path(ticker)
@@ -444,31 +520,42 @@ def train_self_learning_model(ticker, days=5, force_retrain=False):
     except:
         return None, None, None
 
-    df = df[['Close']].copy()
-    df = df.ffill().bfill()
+    # ✅ ADD TECHNICAL INDICATORS
+    if LEARNING_CONFIG["use_technical_indicators"]:
+        df = add_technical_indicators(df)
+        feature_columns = ['Close', 'RSI', 'MACD', 'Volume_Change', 'Distance_Support']
+    else:
+        feature_columns = ['Close']
     
+    df = df[feature_columns].copy()
+    df = df.fillna(method='bfill').fillna(method='ffill')
+    
+    # Scale features
     if training_type == "full-retrain" or not scaler_path.exists():
         scaler = MinMaxScaler()
-        scaler.fit(df[['Close']])
+        scaler.fit(df)
         joblib.dump(scaler, scaler_path)
     else:
         scaler = joblib.load(scaler_path)
     
-    scaled = scaler.transform(df[['Close']])
+    scaled = scaler.transform(df)
     
+    # Prepare sequences
     X, y = [], []
     lookback = LEARNING_CONFIG["lookback_window"]
     for i in range(lookback, len(scaled)):
         X.append(scaled[i-lookback:i])
-        y.append(scaled[i])
+        y.append(scaled[i, 0])  # Predict Close price (first column)
     X, y = np.array(X), np.array(y)
     
     if len(X) == 0:
         return None, None, None
     
+    feature_count = len(feature_columns)
+    
     with model_cache_lock:
         if training_type == "full-retrain":
-            model = build_lstm_model()
+            model = build_lstm_model(feature_count=feature_count)
             epochs = LEARNING_CONFIG["full_retrain_epochs"]
             
             model.fit(X, y, epochs=epochs, batch_size=32, verbose=0, 
@@ -477,7 +564,7 @@ def train_self_learning_model(ticker, days=5, force_retrain=False):
             
             metadata["retrain_count"] += 1
             st.session_state.setdefault('learning_log', []).append(
-                f"🧠 Full retrain #{metadata['retrain_count']} for {ticker} completed"
+                f"🧠 Full retrain #{metadata['retrain_count']} for {ticker} with {feature_count} features"
             )
         else:
             try:
@@ -492,7 +579,7 @@ def train_self_learning_model(ticker, days=5, force_retrain=False):
                     f"⚡ Fine-tuned {ticker} on recent data"
                 )
             except:
-                model = build_lstm_model()
+                model = build_lstm_model(feature_count=feature_count)
                 model.fit(X, y, epochs=LEARNING_CONFIG["full_retrain_epochs"], 
                           batch_size=32, verbose=0, validation_split=0.1)
         
@@ -506,16 +593,33 @@ def train_self_learning_model(ticker, days=5, force_retrain=False):
         metadata["training_volatility"] = float(df['Close'].pct_change().std())
         metadata["version"] += 1
         metadata["last_accuracy"] = accuracy_log["avg_error"]
+        metadata["feature_count"] = feature_count  # ✅ Track feature count
         save_metadata(ticker, metadata)
     
-    last = scaled[-lookback:].reshape(1, lookback, 1)
+    # Make predictions
+    last = scaled[-lookback:].reshape(1, lookback, feature_count)
     preds = []
     for _ in range(days):
         pred = model.predict(last, verbose=0)
         preds.append(pred[0, 0])
-        last = np.append(last[:, 1:, :], pred.reshape(1, 1, 1), axis=1)
+        
+        # Create next input with predicted price + last known indicators
+        next_input = np.zeros((1, 1, feature_count))
+        next_input[0, 0, 0] = pred[0, 0]  # Predicted close
+        # Copy last known indicator values for other features
+        for j in range(1, feature_count):
+            next_input[0, 0, j] = last[0, -1, j]
+        
+        last = np.append(last[:, 1:, :], next_input, axis=1)
     
-    forecast = scaler.inverse_transform(np.array(preds).reshape(-1, 1)).flatten()
+    # Inverse transform predictions (only the Close price column)
+    forecast_scaled = np.zeros((len(preds), feature_count))
+    forecast_scaled[:, 0] = preds
+    for j in range(1, feature_count):
+        forecast_scaled[:, j] = scaled[-1, j]
+    
+    forecast_full = scaler.inverse_transform(forecast_scaled)
+    forecast = forecast_full[:, 0]  # Extract Close prices
     
     tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
     record_prediction(ticker, forecast[0], tomorrow)
@@ -625,6 +729,7 @@ def show_5day_forecast(ticker, asset_name):
     if accuracy_log["total_predictions"] > 0:
         st.info(f"🧠 Model learns from {accuracy_log['total_predictions']} validated predictions | "
                 f"Accuracy: {(1 - accuracy_log['avg_error'])*100:.1f}% | "
+                f"Features: {metadata.get('feature_count', 1)} | "
                 f"Version: {metadata['version']} | "
                 f"Retrains: {metadata['retrain_count']}")
 
@@ -946,7 +1051,8 @@ with col2:
         {"Metric": "Training Volatility", "Value": f"{metadata['training_volatility']:.4f}"},
         {"Metric": "Model Version", "Value": str(metadata["version"])},
         {"Metric": "Retrain Count", "Value": str(metadata["retrain_count"])},
-        {"Metric": "Lookback Window", "Value": str(LEARNING_CONFIG["lookback_window"])}
+        {"Metric": "Feature Count", "Value": str(metadata.get("feature_count", 1))},
+        {"Metric": "Technical Indicators", "Value": "✅ Enabled" if LEARNING_CONFIG["use_technical_indicators"] else "❌ Disabled"}
     ]
 
     if perf_data:
