@@ -471,15 +471,19 @@ def detect_cup_and_handle(df, cup_depth_min=0.20, cup_depth_max=0.60, handle_ret
 def engineer_optimal_features(df):
     """
     Creates optimal 9-feature set for maximum LSTM accuracy.
-    Includes explicit conversion of 'Close' to a Pandas Series for the 'ta' library.
+    Includes explicit conversion to handle the dimensional issues with the 'ta' library.
     """
-    # Ensure OHLCV data is available
+    # 1. Ensure OHLCV data is available and create a fresh copy
     df = df[['Open', 'High', 'Low', 'Close', 'Volume']].copy()
     df = df.ffill().bfill()
     
-    # --- FIX: Define the Close Series once to ensure proper dimensionality (prevents ValueError) ---
-    close_series = df['Close']
+    # 2. Define the Close Series. Use .copy() and .squeeze() for maximum safety and ensure 1D.
+    close_series = df['Close'].copy().squeeze() 
     
+    # 3. Handle data type (convert to float64 for compatibility)
+    if close_series.dtype != np.float64:
+        close_series = close_series.astype(np.float64)
+
     # === 1. TREND FEATURES ===
     df['SMA_50'] = ta.trend.sma_indicator(close_series, window=50) 
     df['Price_vs_SMA50'] = (df['Close'] - df['SMA_50']) / df['SMA_50']
@@ -489,8 +493,10 @@ def engineer_optimal_features(df):
     df['MACD_Signal'] = ta.trend.macd_diff(close_series, window_fast=12, window_slow=26, window_sign=9)
     
     # === 3. VOLATILITY FEATURES ===
-    # ATR requires High, Low, and Close
-    df['ATR'] = ta.volatility.average_true_range(df['High'], df['Low'], close_series, window=14)
+    # ATR requires High, Low, and Close, ensuring types are correct
+    df['ATR'] = ta.volatility.average_true_range(df['High'].astype(np.float64), 
+                                                 df['Low'].astype(np.float64), 
+                                                 close_series, window=14)
     df['ATR_Normalized'] = df['ATR'] / df['Close']
     
     # Bollinger Bands require Close
@@ -504,8 +510,8 @@ def engineer_optimal_features(df):
     df['Volume_MA'] = df['Volume'].rolling(20).mean()
     df['Volume_Ratio'] = df['Volume'] / df['Volume_MA']
     
-    # OBV requires Close and Volume
-    df['OBV'] = ta.volume.on_balance_volume(close_series, df['Volume'])
+    # OBV requires Close and Volume, ensuring types are correct
+    df['OBV'] = ta.volume.on_balance_volume(close_series, df['Volume'].astype(np.float64))
     df['OBV_Trend'] = df['OBV'].pct_change(periods=10)
     
     # === 5. PATTERN FEATURES ===
@@ -571,8 +577,7 @@ def train_self_learning_model(ticker, days=5, force_retrain=False):
             return None, None, None
             
         # *** CRITICAL FIX: Reset the index to resolve the ValueError: Data must be 1-dimensional ***
-        # This converts the complex date index to a simple numeric index, which resolves the 
-        # dimensional issues when 'ta' processes the DataFrame columns.
+        # This converts the complex date index to a simple numeric index.
         df = df.reset_index(drop=True) 
         # *****************************************************************************************
         
