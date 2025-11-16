@@ -18,7 +18,6 @@ import json
 from pathlib import Path
 
 # New Imports needed for the requested indicators and patterns
-# FIX: Use the 'ta' library you have installed instead of pandas_ta
 import ta
 from scipy.signal import argrelextrema
 # End New Imports
@@ -237,6 +236,7 @@ def get_latest_price(ticker):
         if data.empty or len(data) == 0:
             return None
         price = float(data['Close'].iloc[-1])
+        # Use simple rounding rules for displaying price
         return round(price, 4) if ticker.endswith(("=F", "=X")) else round(price, 2)
     except:
         return None
@@ -470,36 +470,32 @@ def detect_cup_and_handle(df, cup_depth_min=0.20, cup_depth_max=0.60, handle_ret
 # ================================
 def engineer_optimal_features(df):
     """
-    Creates optimal 9-feature set for maximum LSTM accuracy, including:
-    Trend (Price_vs_SMA50), Momentum (RSI, MACD_Signal), Volatility (ATR_Normalized, Bollinger_Position), 
-    Volume (Volume_Ratio, OBV_Trend), and Pattern (CupHandle_Signal).
-    
-    Uses the 'ta' library (0.11.0) with explicit submodule calls.
+    Creates optimal 9-feature set for maximum LSTM accuracy.
+    Includes explicit conversion of 'Close' to a Pandas Series for the 'ta' library.
     """
     # Ensure OHLCV data is available
     df = df[['Open', 'High', 'Low', 'Close', 'Volume']].copy()
     df = df.ffill().bfill()
     
+    # --- FIX: Define the Close Series once to ensure proper dimensionality (prevents ValueError) ---
+    close_series = df['Close']
+    
     # === 1. TREND FEATURES ===
-    # Use ta.trend.sma
-    df['SMA_50'] = ta.trend.sma(df['Close'], window=50) 
+    df['SMA_50'] = ta.trend.sma_indicator(close_series, window=50) 
     df['Price_vs_SMA50'] = (df['Close'] - df['SMA_50']) / df['SMA_50']
     
     # === 2. MOMENTUM FEATURES ===
-    # Use ta.momentum.rsi
-    df['RSI'] = ta.momentum.rsi(df['Close'], window=14)
-    
-    # Use ta.trend.macd_diff (MACD Histogram)
-    df['MACD_Signal'] = ta.trend.macd_diff(df['Close'], window_fast=12, window_slow=26, window_sign=9)
+    df['RSI'] = ta.momentum.rsi(close_series, window=14)
+    df['MACD_Signal'] = ta.trend.macd_diff(close_series, window_fast=12, window_slow=26, window_sign=9)
     
     # === 3. VOLATILITY FEATURES ===
-    # Use ta.volatility.average_true_range
-    df['ATR'] = ta.volatility.average_true_range(df['High'], df['Low'], df['Close'], window=14)
+    # ATR requires High, Low, and Close
+    df['ATR'] = ta.volatility.average_true_range(df['High'], df['Low'], close_series, window=14)
     df['ATR_Normalized'] = df['ATR'] / df['Close']
     
-    # Use ta.volatility.bollinger_hband_indicator and lband_indicator to calculate position
-    df['BBL'] = ta.volatility.bollinger_lband(df['Close'], window=20, window_dev=2)
-    df['BBU'] = ta.volatility.bollinger_hband(df['Close'], window=20, window_dev=2)
+    # Bollinger Bands require Close
+    df['BBL'] = ta.volatility.bollinger_lband(close_series, window=20, window_dev=2)
+    df['BBU'] = ta.volatility.bollinger_hband(close_series, window=20, window_dev=2)
     
     # Bollinger Position: (Close - BBL) / (BBU - BBL)
     df['Bollinger_Position'] = (df['Close'] - df['BBL']) / (df['BBU'] - df['BBL'])
@@ -508,8 +504,8 @@ def engineer_optimal_features(df):
     df['Volume_MA'] = df['Volume'].rolling(20).mean()
     df['Volume_Ratio'] = df['Volume'] / df['Volume_MA']
     
-    # Use ta.volume.on_balance_volume
-    df['OBV'] = ta.volume.on_balance_volume(df['Close'], df['Volume'])
+    # OBV requires Close and Volume
+    df['OBV'] = ta.volume.on_balance_volume(close_series, df['Volume'])
     df['OBV_Trend'] = df['OBV'].pct_change(periods=10)
     
     # === 5. PATTERN FEATURES ===
@@ -541,7 +537,7 @@ def engineer_optimal_features(df):
     return df_features, len(OPTIMAL_FEATURES)
 
 # ================================
-# 14. SELF-LEARNING TRAINING SYSTEM
+# 14. SELF-LEARNING TRAINING SYSTEM (MODIFIED DATA PREP)
 # ================================
 def train_self_learning_model(ticker, days=5, force_retrain=False):
     """Fully autonomous self-learning training system with multivariate features (9-Features)."""
@@ -573,6 +569,13 @@ def train_self_learning_model(ticker, days=5, force_retrain=False):
         df = yf.download(ticker, period="1y", progress=False)
         if len(df) < 200:
             return None, None, None
+            
+        # *** CRITICAL FIX: Reset the index to resolve the ValueError: Data must be 1-dimensional ***
+        # This converts the complex date index to a simple numeric index, which resolves the 
+        # dimensional issues when 'ta' processes the DataFrame columns.
+        df = df.reset_index(drop=True) 
+        # *****************************************************************************************
+        
     except:
         return None, None, None
 
