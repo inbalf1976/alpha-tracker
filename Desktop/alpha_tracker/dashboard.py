@@ -171,76 +171,57 @@ def get_prediction_path(ticker, date):
     return PREDICTIONS_DIR / f"{get_safe_ticker_name(ticker)}_{date}.json"
 
 # ================================
-# 9. PRICE FETCHING (✅ REVERTED TO WORKING ORDER)
+# 9. PRICE FETCHING (✅ CACHE BUSTING FOR COMMODITIES)
 # ================================
-@st.cache_data(ttl=30, show_spinner=False)
+@st.cache_data(ttl=15, show_spinner=False)  # Reduced to 15 seconds for commodities
 def get_latest_price(ticker):
     """Fetch latest price - prioritizes historical data over info for accuracy."""
     try:
-        # Method 1: Try recent history with 5-day period (most reliable for commodities)
+        # Method 1: Try recent history with 2-day period (most reliable for commodities)
         try:
-            hist = yf.download(ticker, period="5d", interval="1d", progress=False, auto_adjust=True)
+            hist = yf.download(ticker, period="2d", interval="1d", progress=False, auto_adjust=True, prepost=False)
             if not hist.empty and len(hist) > 0:
                 price = float(hist['Close'].iloc[-1])
                 if price > 0:
-                    return round(price, 4) if ticker.endswith(("=F", "=X")) else round(price, 2)
+                    return round(price, 2) if ticker.endswith(("=F", "=X")) else round(price, 2)
         except:
             pass
         
-        # Method 2: Try 1-hour interval with 2-day period
-        try:
-            data = yf.download(ticker, period="2d", interval="1h", progress=False, auto_adjust=True)
-            if not data.empty and len(data) > 0:
-                price = float(data['Close'].iloc[-1])
-                if price > 0:
-                    return round(price, 4) if ticker.endswith(("=F", "=X")) else round(price, 2)
-        except:
-            pass
-        
-        # Method 3: Try 15-minute interval
-        try:
-            data = yf.download(ticker, period="1d", interval="15m", progress=False, auto_adjust=True)
-            if not data.empty and len(data) > 0:
-                price = float(data['Close'].iloc[-1])
-                if price > 0:
-                    return round(price, 4) if ticker.endswith(("=F", "=X")) else round(price, 2)
-        except:
-            pass
-        
-        # Method 4: Try Ticker.history() method
+        # Method 2: Try with Ticker object and history
         try:
             tick = yf.Ticker(ticker)
-            hist = tick.history(period="1d")
+            hist = tick.history(period="2d")
             if not hist.empty and len(hist) > 0:
                 price = float(hist['Close'].iloc[-1])
                 if price > 0:
-                    return round(price, 4) if ticker.endswith(("=F", "=X")) else round(price, 2)
+                    return round(price, 2) if ticker.endswith(("=F", "=X")) else round(price, 2)
         except:
             pass
         
-        # Method 5: Last resort - Ticker.info (can be stale for commodities)
+        # Method 3: Try 1-hour interval with 1-day period
         try:
-            tick = yf.Ticker(ticker)
-            info = tick.info
-            
-            if 'currentPrice' in info and info['currentPrice'] and info['currentPrice'] > 0:
-                price = float(info['currentPrice'])
-                return round(price, 4) if ticker.endswith(("=F", "=X")) else round(price, 2)
-            
-            if 'regularMarketPrice' in info and info['regularMarketPrice'] and info['regularMarketPrice'] > 0:
-                price = float(info['regularMarketPrice'])
-                return round(price, 4) if ticker.endswith(("=F", "=X")) else round(price, 2)
-            
-            if 'previousClose' in info and info['previousClose'] and info['previousClose'] > 0:
-                price = float(info['previousClose'])
-                return round(price, 4) if ticker.endswith(("=F", "=X")) else round(price, 2)
+            data = yf.download(ticker, period="1d", interval="1h", progress=False, auto_adjust=True)
+            if not data.empty and len(data) > 0:
+                price = float(data['Close'].iloc[-1])
+                if price > 0:
+                    return round(price, 2) if ticker.endswith(("=F", "=X")) else round(price, 2)
+        except:
+            pass
+        
+        # Method 4: Try 5-minute interval
+        try:
+            data = yf.download(ticker, period="1d", interval="5m", progress=False, auto_adjust=True)
+            if not data.empty and len(data) > 0:
+                price = float(data['Close'].iloc[-1])
+                if price > 0:
+                    return round(price, 2) if ticker.endswith(("=F", "=X")) else round(price, 2)
         except:
             pass
         
         return None
         
     except Exception as e:
-        error_msg = f"All methods failed for {ticker}: {str(e)[:100]}"
+        error_msg = f"Price fetch failed for {ticker}: {str(e)[:100]}"
         st.session_state.setdefault('errors', []).append(error_msg)
         return None
 
@@ -1069,6 +1050,11 @@ with col2:
             unsafe_allow_html=True
         )
         st.caption(f"Last updated: {current_time}")
+        
+        # Add refresh button to clear cache
+        if st.button("🔄 Refresh Price", key="refresh_price"):
+            st.cache_data.clear()
+            st.rerun()
     else:
         st.warning("⚠️ Market closed or no data available")
         # Show errors if any
