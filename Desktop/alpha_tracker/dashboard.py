@@ -684,21 +684,14 @@ def train_self_learning_model(ticker, days=5, force_retrain=False):
     return forecast, dates, model
 
 # ================================
-# 16. DAILY RECOMMENDATION (✅ FIXED CONSISTENCY)
+# 15. DAILY RECOMMENDATION
 # ================================
-def daily_recommendation(ticker, asset, forecast_data=None):
-    """Generate daily recommendation - uses shared forecast for consistency."""
+def daily_recommendation(ticker, asset):
     price = get_latest_price(ticker)
     if not price:  
         return "<span style='color:orange'>Market closed or no data</span>"
     
-    # If forecast data provided, use it (ensures consistency with 5-day forecast)
-    if forecast_data is not None:
-        forecast = forecast_data
-    else:
-        # Generate fresh prediction
-        forecast, _, _ = train_self_learning_model(ticker, 1)
-    
+    forecast, _, _ = train_self_learning_model(ticker, 1)
     if forecast is None or len(forecast) == 0:
         return "<span style='color:orange'>Unable to generate forecast</span>"
     
@@ -724,10 +717,9 @@ def daily_recommendation(ticker, asset, forecast_data=None):
     """
 
 # ================================
-# 17. 5-DAY FORECAST (✅ FIXED CONSISTENCY)
+# 16. 5-DAY FORECAST
 # ================================
 def show_5day_forecast(ticker, asset_name):
-    """Display 5-day forecast with consistent daily recommendation."""
     forecast, dates, _ = train_self_learning_model(ticker, days=5)
     if forecast is None:
         st.error("Failed to generate forecast.")
@@ -787,11 +779,6 @@ def show_5day_forecast(ticker, asset_name):
                 f"Features: {metadata.get('feature_count', 1)} | "
                 f"Version: {metadata['version']} | "
                 f"Retrains: {metadata['retrain_count']}")
-    
-    # ✅ NEW: Show daily recommendation using same forecast data for consistency
-    st.markdown("---")
-    st.markdown("### 📊 Daily Action Based on Day 1 Forecast")
-    st.markdown(daily_recommendation(ticker, asset_name, forecast_data=forecast), unsafe_allow_html=True)
 
 # ================================
 # 17. BACKGROUND LEARNING DAEMON
@@ -1083,8 +1070,7 @@ with col2:
     
     if st.button("📊 Daily Recommendation", width='stretch'):
         with st.spinner("AI analyzing with self-learning..."):
-            st.markdown(daily_recommendation(ticker, asset, forecast_data=None), unsafe_allow_html=True)
-            st.info("💡 Tip: Use '5-Day Forecast' button to see the full prediction with consistent daily action!")
+            st.markdown(daily_recommendation(ticker, asset), unsafe_allow_html=True)
     
     if st.button("📈 5-Day Self-Learning Forecast", width='stretch'):
         with st.spinner("Self-learning model adapting..."):
