@@ -256,8 +256,14 @@ def calculate_rsi(prices, period=14):
     delta = prices.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss
+    
+    # Prevent division by zero
+    rs = gain / loss.replace(0, 1e-10)
     rsi = 100 - (100 / (1 + rs))
+    
+    # Replace inf/-inf with neutral RSI value
+    rsi = rsi.replace([np.inf, -np.inf], 50)
+    
     return rsi
 
 def calculate_macd(prices, fast=12, slow=26, signal=9):
@@ -270,7 +276,10 @@ def calculate_macd(prices, fast=12, slow=26, signal=9):
 
 def calculate_volume_change(volume):
     """Calculate volume rate of change."""
-    return volume.pct_change()
+    vol_change = volume.pct_change()
+    # Replace inf/-inf with 0 (means no change)
+    vol_change = vol_change.replace([np.inf, -np.inf], 0)
+    return vol_change
 
 def find_support_resistance(prices, window=20):
     """Find nearest support and resistance levels."""
@@ -318,8 +327,14 @@ def add_technical_indicators(df):
     df['Distance_Support'] = (df['Close'] - support) / df['Close']
     df['Distance_Resistance'] = (resistance - df['Close']) / df['Close']
     
-    # Fill NaN values
+    # Fill NaN values with forward/backward fill first
     df = df.fillna(method='bfill').fillna(method='ffill')
+    
+    # Replace any remaining inf/-inf with 0
+    df = df.replace([np.inf, -np.inf], 0)
+    
+    # Final check: fill any remaining NaN with 0
+    df = df.fillna(0)
     
     return df
 
