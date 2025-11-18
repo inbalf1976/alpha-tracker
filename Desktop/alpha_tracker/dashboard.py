@@ -529,14 +529,26 @@ def train_self_learning_model(ticker, days=5, force_retrain=False):
                       ticker=ticker, user_message=f"Data quality issue: {ticker}", show_to_user=False)
             return None, None, None
         
-        # Scaler
+        # Scaler with feature mismatch detection
         try:
             if training_type == "full-retrain" or not scaler_path.exists():
                 scaler = MinMaxScaler()
                 scaler.fit(df[['Close']])
                 joblib.dump(scaler, scaler_path)
+                logger.info(f"New scaler created for {ticker}")
             else:
                 scaler = joblib.load(scaler_path)
+                # Check if scaler has wrong number of features
+                if hasattr(scaler, 'n_features_in_') and scaler.n_features_in_ != 1:
+                    logger.warning(f"Scaler feature mismatch for {ticker}: expected 1, got {scaler.n_features_in_}. Recreating scaler.")
+                    scaler = MinMaxScaler()
+                    scaler.fit(df[['Close']])
+                    joblib.dump(scaler, scaler_path)
+                    # Also delete old model since it won't match
+                    if model_path.exists():
+                        model_path.unlink()
+                        logger.info(f"Deleted incompatible model for {ticker}")
+                    training_type = "full-retrain"
         except Exception as e:
             log_error(ErrorSeverity.ERROR, "train_self_learning_model", e, ticker=ticker, user_message="Scaler error")
             return None, None, None
