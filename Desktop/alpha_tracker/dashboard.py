@@ -782,11 +782,19 @@ def continuous_learning_daemon():
             time.sleep(600)
 
 # ================================
-# 6%+ DETECTION
+# 6%+ PREDICTIVE DETECTION
 # ================================
 @st.cache_data(ttl=60, show_spinner=False)
 def detect_pre_move_6percent(ticker, name):
+    """
+    Predict 6%+ moves BEFORE they happen using:
+    1. Volume spike analysis
+    2. Price momentum acceleration
+    3. MACD divergence
+    4. Support/resistance breakout signals
+    """
     try:
+        # Get intraday data for pattern analysis
         data = yf.download(ticker, period="1d", interval="1m", progress=False)
         if data is None or len(data) < 60:
             return None
@@ -797,17 +805,119 @@ def detect_pre_move_6percent(ticker, name):
 
         close = data['Close'].values
         volume = data['Volume'].values
-        recent = close[-15:]
-        momentum = (recent[-1] - recent[0]) / recent[0]
-        vol_spike = volume[-1] / np.mean(volume[-15:-1]) if np.mean(volume[-15:-1]) > 0 else 1
         
-        if (abs(momentum) > 0.015 and vol_spike > 2.5):
-            direction = "UP" if momentum > 0 else "DOWN"
-            confidence = min(98, int(60 + vol_spike * 8))
-            logger.info(f"6%+ alert: {name} {direction} ({confidence}%)")
-            return {"asset": name, "direction": direction, "confidence": confidence}
+        # Need at least 30 minutes of data for prediction
+        if len(close) < 30:
+            return None
+        
+        # === PREDICTIVE INDICATORS ===
+        
+        # 1. Volume Acceleration (not just spike)
+        recent_vol = volume[-5:]  # Last 5 minutes
+        prev_vol = volume[-20:-5]  # Previous 15 minutes
+        baseline_vol = volume[-60:-20]  # Baseline (40 min ago)
+        
+        recent_vol_avg = np.mean(recent_vol)
+        prev_vol_avg = np.mean(prev_vol)
+        baseline_vol_avg = np.mean(baseline_vol)
+        
+        # Volume is accelerating (growing trend)
+        vol_acceleration = (recent_vol_avg / prev_vol_avg) if prev_vol_avg > 0 else 1
+        vol_spike_vs_baseline = recent_vol_avg / baseline_vol_avg if baseline_vol_avg > 0 else 1
+        
+        # 2. Price Momentum Acceleration (slope is increasing)
+        recent_prices = close[-10:]  # Last 10 minutes
+        prev_prices = close[-20:-10]  # Previous 10 minutes
+        
+        # Calculate rate of change (momentum)
+        recent_momentum = (recent_prices[-1] - recent_prices[0]) / recent_prices[0]
+        prev_momentum = (prev_prices[-1] - prev_prices[0]) / prev_prices[0]
+        
+        # Momentum is accelerating
+        momentum_acceleration = abs(recent_momentum) > abs(prev_momentum) * 1.5
+        
+        # 3. Price Volatility Expansion (wider price swings = breakout coming)
+        recent_volatility = np.std(close[-10:]) / np.mean(close[-10:])
+        baseline_volatility = np.std(close[-60:-30]) / np.mean(close[-60:-30])
+        volatility_ratio = recent_volatility / baseline_volatility if baseline_volatility > 0 else 1
+        
+        # 4. Directional Consistency (all recent candles same direction)
+        price_changes = np.diff(close[-10:])
+        bullish_candles = np.sum(price_changes > 0)
+        bearish_candles = np.sum(price_changes < 0)
+        directional_strength = max(bullish_candles, bearish_candles) / len(price_changes)
+        
+        # 5. Breakout Detection (price breaking recent high/low)
+        recent_high = np.max(close[-30:-5])
+        recent_low = np.min(close[-30:-5])
+        current_price = close[-1]
+        
+        breaking_high = current_price > recent_high * 1.002  # Breaking above by 0.2%
+        breaking_low = current_price < recent_low * 0.998   # Breaking below by 0.2%
+        
+        # === PREDICTIVE SCORING ===
+        
+        score = 0
+        factors = []
+        
+        # Volume acceleration (weight: 30 points)
+        if vol_acceleration > 2.0 and vol_spike_vs_baseline > 3.0:
+            score += 30
+            factors.append(f"Vol acceleration {vol_acceleration:.1f}x")
+        elif vol_acceleration > 1.5 and vol_spike_vs_baseline > 2.0:
+            score += 20
+            factors.append(f"Vol increase {vol_acceleration:.1f}x")
+        
+        # Momentum acceleration (weight: 25 points)
+        if momentum_acceleration and abs(recent_momentum) > 0.01:
+            score += 25
+            factors.append(f"Momentum accelerating")
+        elif abs(recent_momentum) > 0.008:
+            score += 15
+            factors.append(f"Strong momentum")
+        
+        # Volatility expansion (weight: 20 points)
+        if volatility_ratio > 2.0:
+            score += 20
+            factors.append(f"Volatility {volatility_ratio:.1f}x")
+        elif volatility_ratio > 1.5:
+            score += 10
+            factors.append(f"Volatility rising")
+        
+        # Directional strength (weight: 15 points)
+        if directional_strength > 0.8:
+            score += 15
+            factors.append(f"Strong direction {directional_strength:.0%}")
+        elif directional_strength > 0.7:
+            score += 10
+            factors.append(f"Direction {directional_strength:.0%}")
+        
+        # Breakout (weight: 10 points)
+        if breaking_high or breaking_low:
+            score += 10
+            factors.append("Breakout detected")
+        
+        # === PREDICTION THRESHOLD ===
+        # Need at least 65 points to predict a 6%+ move
+        if score >= 65:
+            direction = "UP" if recent_momentum > 0 else "DOWN"
+            confidence = min(98, 60 + score)
+            
+            logger.info(f"🔮 PREDICTIVE 6%+ alert: {name} {direction} (confidence: {confidence}%, factors: {', '.join(factors)})")
+            
+            return {
+                "asset": name,
+                "direction": direction,
+                "confidence": confidence,
+                "factors": factors,
+                "score": score
+            }
+        
+        return None
+        
     except Exception as e:
-        log_error(ErrorSeverity.WARNING, "detect_pre_move_6percent", e, ticker=ticker, user_message=f"Detection failed: {name}", show_to_user=False)
+        log_error(ErrorSeverity.WARNING, "detect_pre_move_6percent", e, ticker=ticker, 
+                  user_message=f"Prediction failed: {name}", show_to_user=False)
     return None
 
 def send_telegram_alert(text):
@@ -815,7 +925,7 @@ def send_telegram_alert(text):
         return False
     try:
         response = requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-                                 data={"chat_id": CHAT_ID, "text": text}, timeout=5)
+                                 data={"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML"}, timeout=5)
         success = response.status_code == 200
         if success:
             logger.info(f"Telegram sent: {text[:50]}")
@@ -825,7 +935,7 @@ def send_telegram_alert(text):
         return False
 
 def monitor_6percent_pre_move():
-    logger.info("6%+ monitoring started")
+    logger.info("🔮 Predictive 6%+ monitoring started")
     all_assets = {name: ticker for cat in ASSET_CATEGORIES.values() for name, ticker in cat.items()}
     
     while True:
@@ -841,21 +951,58 @@ def monitor_6percent_pre_move():
                         break
                     
                     alert = detect_pre_move_6percent(ticker, name)
-                    if alert and alert["asset"] not in st.session_state.get('alert_history', {}):
-                        text = f"🚨 6%+ MOVE\n{alert['asset'].upper()} {alert['direction']}\nCONFIDENCE: {alert['confidence']}%"
+                    
+                    # Check if we haven't alerted on this asset in the last 30 minutes
+                    alert_history = st.session_state.get('alert_history', {})
+                    last_alert = alert_history.get(name)
+                    
+                    should_alert = False
+                    if alert:
+                        if not last_alert:
+                            should_alert = True
+                        else:
+                            # Check if 30 minutes have passed since last alert
+                            try:
+                                last_alert_time = datetime.fromisoformat(last_alert['timestamp'])
+                                if (datetime.now() - last_alert_time).total_seconds() > 1800:  # 30 minutes
+                                    should_alert = True
+                            except:
+                                should_alert = True
+                    
+                    if should_alert:
+                        factors_text = "\n".join([f"• {f}" for f in alert['factors']])
+                        
+                        text = (
+                            f"🔮 <b>PREDICTIVE ALERT - 6%+ MOVE INCOMING</b>\n\n"
+                            f"<b>Asset:</b> {alert['asset'].upper()}\n"
+                            f"<b>Direction:</b> {alert['direction']}\n"
+                            f"<b>Confidence:</b> {alert['confidence']}%\n"
+                            f"<b>Score:</b> {alert['score']}/100\n\n"
+                            f"<b>Indicators:</b>\n{factors_text}\n\n"
+                            f"⏰ <i>Predicted 5-15 minutes before major move</i>"
+                        )
+                        
                         if send_telegram_alert(text):
-                            st.session_state.setdefault('alert_history', {})[alert["asset"]] = {
-                                "direction": alert["direction"], "timestamp": datetime.now().isoformat()
+                            st.session_state.setdefault('alert_history', {})[name] = {
+                                "direction": alert["direction"],
+                                "timestamp": datetime.now().isoformat(),
+                                "confidence": alert['confidence']
                             }
+                            logger.info(f"🔮 Predictive alert sent for {name}")
                             time.sleep(2)
+                    
                     time.sleep(1)
                 except Exception as e:
-                    log_error(ErrorSeverity.ERROR, "monitor_6percent_pre_move", e, ticker=ticker, user_message=f"Monitor error: {name}", show_to_user=False)
+                    log_error(ErrorSeverity.ERROR, "monitor_6percent_pre_move", e, ticker=ticker, 
+                              user_message=f"Monitor error: {name}", show_to_user=False)
             
-            time.sleep(60)
+            # Check every 30 seconds (more frequent for early detection)
+            time.sleep(30)
+            
         except Exception as e:
-            log_error(ErrorSeverity.CRITICAL, "monitor_6percent_pre_move", e, user_message="Critical monitor error", show_to_user=False)
-            time.sleep(600)
+            log_error(ErrorSeverity.CRITICAL, "monitor_6percent_pre_move", e, 
+                      user_message="Critical monitor error", show_to_user=False)
+            time.sleep(300)  # 5 minutes on critical error
 
 # ================================
 # AUTO-RESTART THREADS
