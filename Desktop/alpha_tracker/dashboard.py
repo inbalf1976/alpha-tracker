@@ -44,26 +44,39 @@ def setup_logging():
     logger = logging.getLogger('stock_tracker')
     logger.setLevel(logging.DEBUG)
     
+    # Clear any existing handlers
+    logger.handlers.clear()
+    
     # Console handler
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.INFO)
     console_formatter = logging.Formatter('%(asctime)s | %(levelname)-8s | %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
     console_handler.setFormatter(console_formatter)
     
-    # File handler
-    file_handler = RotatingFileHandler(LOG_DIR / 'app.log', maxBytes=10*1024*1024, backupCount=5)
+    # File handler - RESET on startup by using 'w' mode
+    file_handler = RotatingFileHandler(LOG_DIR / 'app.log', maxBytes=10*1024*1024, backupCount=5, mode='w')
     file_handler.setLevel(logging.DEBUG)
     file_formatter = logging.Formatter('%(asctime)s | %(levelname)-8s | %(funcName)s | %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
     file_handler.setFormatter(file_formatter)
     
-    # Error file handler
-    error_handler = RotatingFileHandler(LOG_DIR / 'errors.log', maxBytes=5*1024*1024, backupCount=3)
+    # Error file handler - RESET on startup by using 'w' mode
+    error_handler = RotatingFileHandler(LOG_DIR / 'errors.log', maxBytes=5*1024*1024, backupCount=3, mode='w')
     error_handler.setLevel(logging.ERROR)
     error_handler.setFormatter(file_formatter)
     
     logger.addHandler(console_handler)
     logger.addHandler(file_handler)
     logger.addHandler(error_handler)
+    
+    # Reset error tracking JSON file
+    try:
+        if ERROR_LOG_PATH.exists():
+            ERROR_LOG_PATH.unlink()
+        # Create fresh empty file
+        json.dump([], open(ERROR_LOG_PATH, 'w'))
+        logger.info("=== NEW SESSION STARTED - LOGS RESET ===")
+    except Exception as e:
+        logger.warning(f"Could not reset error tracking file: {e}")
     
     return logger
 
