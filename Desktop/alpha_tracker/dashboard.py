@@ -484,6 +484,68 @@ def should_retrain(ticker, accuracy_log, metadata):
         log_error(ErrorSeverity.ERROR, "should_retrain", e, ticker=ticker, user_message="Retrain check failed")
     
     return False, reasons
+    
+# ================================
+# HIGH-CONFIDENCE CHECKLIST (ADD THIS FUNCTION ONLY)
+# ================================
+def high_confidence_checklist(ticker: str, forecast: list, current_price: float) -> tuple[bool, list]:
+    """
+    Returns (passed: bool, failed_reasons: list)
+    Only returns True when ALL confidence criteria are met → prediction is shown
+    """
+    reasons = []
+    metadata = load_metadata(ticker)
+    acc_log = load_accuracy_log(ticker)
+
+    # 1. Model maturity
+    if acc_log.get("total_predictions", 0) < 12:
+        reasons.append(f"Only {acc_log['total_predictions']} live predictions")
+
+    if metadata.get("retrain_count", 0) < 2:
+        reasons.append("Model needs ≥2 retrains")
+
+    # 2. Recent accuracy
+    recent_error = acc_log.get("avg_error", 0.99)
+    if recent_error > 0.065:  # >6.5% average error last 30 days
+        reasons.append(f"Recent error {recent_error:.1%} > 6.5%")
+
+    # 3. Model freshness
+    if metadata.get("trained_date"):
+        days_old = (datetime.now() - datetime.fromisoformat(metadata["trained_date"])).days
+        if days_old > 14:
+            reasons.append(f"Model {days_old} days old (>14)")
+
+    # 4. High volatility regime (without recent retrain)
+    try:
+        df = yf.download(ticker, period="60d", progress=False, threads=False)
+        if not df.empty and isinstance(df.columns, pd.MultiIndex):
+            df = df.droplevel(1, axis=1) if df.columns.nlevels > 1 else df
+        vol_20d = df['Close'].pct_change().rolling(20).std().iloc[-1]
+        if vol_20d > 0.04 and days_old > 7:  # >4% daily std dev
+            reasons.append(f"Extreme volatility {vol_20d:.1%}/day")
+    except:
+        pass
+
+    # 5. Unrealistic forecast
+    if forecast and current_price:
+        implied_move = abs(forecast[0] - current_price) / current_price
+        if implied_move > 0.12:  # >12% in one day
+            reasons.append(f"Extreme move predicted {implied_move:+.1%}")
+
+    # 6. Sharp reversal vs recent trend
+    try:
+        hist = yf.download(ticker, period="10d", progress=False, threads=False)
+        if not hist.empty and isinstance(hist.columns, pd.MultiIndex):
+            hist = hist.droplevel(1, axis=1) if hist.columns.nlevels > 1 else hist
+        trend_5d = (hist['Close'].iloc[-1] - hist['Close'].iloc[-6]) / hist['Close'].iloc[-6]
+        pred_move = (forecast[0] - current_price) / current_price if forecast and current_price else 0
+        if trend_5d * pred_move < -0.5:  # strong reversal
+            reasons.append("Predicting sharp reversal")
+    except:
+        pass
+
+    passed = len(reasons) == 0
+    return passed, reasons
 
 # ================================
 # MODEL BUILDING
