@@ -45,21 +45,39 @@ class ErrorSeverity(Enum):
 def reset_all_logs_on_startup():
     """Reset all log files when app starts - gives truly fresh start"""
     try:
-        # Delete all log files
-        if (LOG_DIR / 'app.log').exists():
-            (LOG_DIR / 'app.log').unlink()
-        if (LOG_DIR / 'errors.log').exists():
-            (LOG_DIR / 'errors.log').unlink()
-        if ERROR_LOG_PATH.exists():
-            ERROR_LOG_PATH.unlink()
+        import time
         
-        # Create fresh error tracking file
+        # Close any open file handles by forcing garbage collection
+        import gc
+        gc.collect()
+        
+        # Wait a moment for file handles to release
+        time.sleep(0.1)
+        
+        # Try to delete log files with retry logic
+        for attempt in range(3):
+            try:
+                if (LOG_DIR / 'app.log').exists():
+                    (LOG_DIR / 'app.log').unlink()
+                if (LOG_DIR / 'errors.log').exists():
+                    (LOG_DIR / 'errors.log').unlink()
+                if ERROR_LOG_PATH.exists():
+                    ERROR_LOG_PATH.unlink()
+                break  # Success
+            except PermissionError:
+                if attempt < 2:
+                    time.sleep(0.2)  # Wait and retry
+                else:
+                    # If still locked, just clear the error tracking file
+                    pass
+        
+        # Always create fresh error tracking file
         with open(ERROR_LOG_PATH, 'w') as f:
             json.dump([], f)
             
         return True
     except Exception as e:
-        print(f"Warning: Could not reset logs: {e}")
+        # Don't print error - it's not critical
         return False
 
 # Reset logs BEFORE setting up logging
@@ -959,7 +977,8 @@ def send_telegram_alert(text):
                                  data={"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML"}, timeout=5)
         success = response.status_code == 200
         if success:
-            logger.info(f"Telegram sent: {text[:50]}")
+            # Remove emoji from log message to prevent Unicode error
+            logger.info(f"Telegram alert sent successfully")
         return success
     except Exception as e:
         log_error(ErrorSeverity.WARNING, "send_telegram_alert", e, user_message="Telegram failed", show_to_user=False)
