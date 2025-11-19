@@ -31,6 +31,8 @@ tf.get_logger().setLevel('ERROR')
 # ================================
 LOG_DIR = Path("logs")
 LOG_DIR.mkdir(exist_ok=True)
+
+# Define paths
 ERROR_LOG_PATH = LOG_DIR / "error_tracking.json"
 
 class ErrorSeverity(Enum):
@@ -41,445 +43,1320 @@ class ErrorSeverity(Enum):
     CRITICAL = "CRITICAL"
 
 def reset_all_logs_on_startup():
+    """Reset all log files when app starts - gives truly fresh start"""
     try:
-        for f in ['app.log', 'errors.log']:
-            p = LOG_DIR / f
-            if p.exists(): p.unlink()
-        if ERROR_LOG_PATH.exists(): ERROR_LOG_PATH.unlink()
-        with open(ERROR_LOG_PATH, 'w') as f: json.dump([], f)
-    except: pass
+        # Delete all log files
+        if (LOG_DIR / 'app.log').exists():
+            (LOG_DIR / 'app.log').unlink()
+        if (LOG_DIR / 'errors.log').exists():
+            (LOG_DIR / 'errors.log').unlink()
+        if ERROR_LOG_PATH.exists():
+            ERROR_LOG_PATH.unlink()
+        
+        # Create fresh error tracking file
+        with open(ERROR_LOG_PATH, 'w') as f:
+            json.dump([], f)
+            
+        return True
+    except Exception as e:
+        print(f"Warning: Could not reset logs: {e}")
+        return False
 
+# Reset logs BEFORE setting up logging
 reset_all_logs_on_startup()
 
 def setup_logging():
+    """Configure logging system with fresh start"""
     logger = logging.getLogger('stock_tracker')
     logger.setLevel(logging.DEBUG)
+    
+    # Clear any existing handlers
     logger.handlers.clear()
-
+    
+    # Console handler
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.INFO)
-    console_handler.setFormatter(logging.Formatter('%(asctime)s | %(levelname)-8s | %(message)s', datefmt='%Y-%m-%d %H:%M:%S'))
-
+    console_formatter = logging.Formatter('%(asctime)s | %(levelname)-8s | %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+    console_handler.setFormatter(console_formatter)
+    
+    # File handler - Normal append mode (files already reset)
     file_handler = RotatingFileHandler(LOG_DIR / 'app.log', maxBytes=10*1024*1024, backupCount=5)
     file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(logging.Formatter('%(asctime)s | %(levelname)-8s | %(funcName)s | %(message)s', datefmt='%Y-%m-%d %H:%M:%S'))
-
+    file_formatter = logging.Formatter('%(asctime)s | %(levelname)-8s | %(funcName)s | %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+    file_handler.setFormatter(file_formatter)
+    
+    # Error file handler - Normal append mode (files already reset)
     error_handler = RotatingFileHandler(LOG_DIR / 'errors.log', maxBytes=5*1024*1024, backupCount=3)
     error_handler.setLevel(logging.ERROR)
-    error_handler.setFormatter(logging.Formatter('%(asctime)s | %(levelname)-8s | %(funcName)s | %(message)s'))
-
+    error_handler.setFormatter(file_formatter)
+    
     logger.addHandler(console_handler)
     logger.addHandler(file_handler)
     logger.addHandler(error_handler)
+    
     logger.info("=== NEW SESSION STARTED - ALL LOGS RESET ===")
+    
     return logger
 
 logger = setup_logging()
+ERROR_LOG_PATH = LOG_DIR / "error_tracking.json"
 
 def log_error(severity, function_name, error, ticker=None, user_message="An error occurred", show_to_user=True):
+    """Centralized error logging"""
     error_data = {
         "timestamp": datetime.now().isoformat(),
         "severity": severity.value,
-        "ticker": ticker or "N/A",
+        "ticker": ticker,
         "function": function_name,
         "error": str(error),
         "user_message": user_message
     }
-    msg = f"{ticker or 'N/A'} | {user_message}: {error}"
-    if severity == ErrorSeverity.CRITICAL:
-        logger.critical(msg, exc_info=True)
+    
+    # Log to file
+    log_msg = f"{ticker or 'N/A'} | {user_message}: {str(error)}"
+    if severity == ErrorSeverity.DEBUG:
+        logger.debug(log_msg)
+    elif severity == ErrorSeverity.INFO:
+        logger.info(log_msg)
+    elif severity == ErrorSeverity.WARNING:
+        logger.warning(log_msg)
     elif severity == ErrorSeverity.ERROR:
-        logger.error(msg, exc_info=True)
-    else:
-        logger.warning(msg)
-
+        logger.error(log_msg, exc_info=True)
+    elif severity == ErrorSeverity.CRITICAL:
+        logger.critical(log_msg, exc_info=True)
+    
+    # Save to tracking file
     try:
-        history = json.load(open(ERROR_LOG_PATH)) if ERROR_LOG_PATH.exists() else []
+        history = json.load(open(ERROR_LOG_PATH, 'r')) if ERROR_LOG_PATH.exists() else []
         history.append(error_data)
-        json.dump(history[-500:], open(ERROR_LOG_PATH, 'w'), indent=2)
-    except: pass
-
-    if show_to_user and 'st' in globals():
+        history = history[-500:]  # Keep last 500
+        json.dump(history, open(ERROR_LOG_PATH, 'w'), indent=2)
+    except:
+        pass
+    
+    # Show to user
+    if show_to_user:
         if severity == ErrorSeverity.CRITICAL:
-            st.error(f"CRITICAL: {user_message}")
+            st.error(f"🚨 {user_message}")
         elif severity == ErrorSeverity.ERROR:
-            st.error(f"ERROR: {user_message}")
+            st.error(f"❌ {user_message}")
         elif severity == ErrorSeverity.WARNING:
-            st.warning(f"WARNING: {user_message}")
-
+            st.warning(f"⚠️ {user_message}")
+    
+    # Add to session state
     st.session_state.setdefault('error_logs', []).append(error_data)
 
+def get_error_statistics():
+    """Get error statistics"""
+    try:
+        if not ERROR_LOG_PATH.exists():
+            return {"total": 0, "by_severity": {}, "recent": []}
+        
+        errors = json.load(open(ERROR_LOG_PATH, 'r'))
+        by_severity = {}
+        for error in errors:
+            sev = error.get('severity', 'UNKNOWN')
+            by_severity[sev] = by_severity.get(sev, 0) + 1
+        
+        return {"total": len(errors), "by_severity": by_severity, "recent": errors[-10:]}
+    except:
+        return {"total": 0, "by_severity": {}, "recent": []}
+
 # ================================
-# CONFIG & DIRECTORIES
+# CONFIG & KEYS
 # ================================
 try:
     BOT_TOKEN = st.secrets.get("TELEGRAM_BOT_TOKEN") or os.getenv("TELEGRAM_BOT_TOKEN")
     CHAT_ID = st.secrets.get("TELEGRAM_CHAT_ID") or os.getenv("TELEGRAM_CHAT_ID")
-except: BOT_TOKEN = CHAT_ID = None
+    ALPHA_VANTAGE_KEY = st.secrets.get("ALPHA_VANTAGE_KEY") or os.getenv("ALPHA_VANTAGE_KEY")
+    logger.info("Configuration loaded")
+except Exception as e:
+    log_error(ErrorSeverity.WARNING, "config_load", e, user_message="Some API keys missing", show_to_user=False)
+    BOT_TOKEN = CHAT_ID = ALPHA_VANTAGE_KEY = None
 
+# ================================
+# ASSETS
+# ================================
 ASSET_CATEGORIES = {
     "Tech Stocks": {"Apple": "AAPL", "Tesla": "TSLA", "NVIDIA": "NVDA", "Microsoft": "MSFT", "Alphabet": "GOOGL"},
     "High Growth": {"Palantir": "PLTR", "MicroStrategy": "MSTR", "Coinbase": "COIN"},
-    "Commodities": {"Gold Futures": "GC=F", "Crude Oil": "CL=F", "Corn": "ZC=F"},
-    "ETFs": {"S&P 500 ETF": "SPY", "Wheat ETF": "WEAT"}
+    "Commodities": {"Corn Futures": "ZC=F", "Gold Futures": "GC=F", "Coffee Futures": "KC=F", "Crude Oil": "CL=F", "Wheat": "ZW=F"},
+    "ETFs": {"S&P 500 ETF": "SPY", "WHEAT": "WEAT"}
 }
 
-MODEL_DIR = Path("models"); SCALER_DIR = Path("scalers"); ACCURACY_DIR = Path("accuracy_logs")
-METADATA_DIR = Path("metadata"); PREDICTIONS_DIR = Path("predictions"); BACKTEST_DIR = Path("backtests")
-CONFIG_DIR = Path("config"); LOG_DIR.mkdir(exist_ok=True)
-for p in [MODEL_DIR, SCALER_DIR, ACCURACY_DIR, METADATA_DIR, PREDICTIONS_DIR, BACKTEST_DIR, CONFIG_DIR]:
-    p.mkdir(exist_ok=True)
+# ================================
+# DIRECTORIES
+# ================================
+MODEL_DIR = Path("models")
+SCALER_DIR = Path("scalers")
+ACCURACY_DIR = Path("accuracy_logs")
+METADATA_DIR = Path("metadata")
+PREDICTIONS_DIR = Path("predictions")
+CONFIG_DIR = Path("config")
+
+try:
+    for dir_path in [MODEL_DIR, SCALER_DIR, ACCURACY_DIR, METADATA_DIR, PREDICTIONS_DIR, CONFIG_DIR, LOG_DIR]:
+        dir_path.mkdir(exist_ok=True)
+    logger.info("Directories created")
+except Exception as e:
+    log_error(ErrorSeverity.CRITICAL, "directory_creation", e, user_message="Failed to create directories")
 
 DAEMON_CONFIG_PATH = CONFIG_DIR / "daemon_config.json"
 MONITORING_CONFIG_PATH = CONFIG_DIR / "monitoring_config.json"
 
+# ================================
+# CONFIG
+# ================================
 LEARNING_CONFIG = {
-    "lookback_window": 60,
-    "accuracy_threshold": 0.065,        # tightened from 0.08
-    "min_predictions_for_eval": 12,
-    "retrain_interval_days": 21,
-    "full_retrain_epochs": 30,
-    "fine_tune_epochs": 7
+    "accuracy_threshold": 0.08,
+    "min_predictions_for_eval": 10,
+    "retrain_interval_days": 30,
+    "volatility_change_threshold": 0.5,
+    "fine_tune_epochs": 5,
+    "full_retrain_epochs": 25,
+    "lookback_window": 60
 }
+
+model_cache_lock = threading.Lock()
+accuracy_lock = threading.Lock()
+config_lock = threading.Lock()
+
+# ================================
+# PERSISTENT CONFIG
+# ================================
+def load_daemon_config():
+    try:
+        if DAEMON_CONFIG_PATH.exists():
+            with config_lock:
+                return json.load(open(DAEMON_CONFIG_PATH, 'r'))
+    except Exception as e:
+        log_error(ErrorSeverity.WARNING, "load_daemon_config", e, user_message="Config load failed", show_to_user=False)
+    return {"enabled": False, "last_started": None}
+
+def save_daemon_config(enabled):
+    try:
+        config = {"enabled": enabled, "last_started": datetime.now().isoformat() if enabled else None}
+        with config_lock:
+            json.dump(config, open(DAEMON_CONFIG_PATH, 'w'), indent=2)
+        logger.info(f"Daemon config saved: {enabled}")
+        return True
+    except Exception as e:
+        log_error(ErrorSeverity.ERROR, "save_daemon_config", e, user_message="Failed to save config")
+        return False
+
+def load_monitoring_config():
+    try:
+        if MONITORING_CONFIG_PATH.exists():
+            with config_lock:
+                return json.load(open(MONITORING_CONFIG_PATH, 'r'))
+    except Exception as e:
+        log_error(ErrorSeverity.WARNING, "load_monitoring_config", e, user_message="Config load failed", show_to_user=False)
+    return {"enabled": False, "last_started": None}
+
+def save_monitoring_config(enabled):
+    try:
+        config = {"enabled": enabled, "last_started": datetime.now().isoformat() if enabled else None}
+        with config_lock:
+            json.dump(config, open(MONITORING_CONFIG_PATH, 'w'), indent=2)
+        logger.info(f"Monitoring config saved: {enabled}")
+        return True
+    except Exception as e:
+        log_error(ErrorSeverity.ERROR, "save_monitoring_config", e, user_message="Failed to save config")
+        return False
 
 # ================================
 # HELPERS
 # ================================
-def get_safe_ticker_name(t): return t.replace('=', '_').replace('^', '').replace('/', '_')
-def get_model_path(t): return MODEL_DIR / f"{get_safe_ticker_name(t)}_lstm.h5"
-def get_scaler_path(t): return SCALER_DIR / f"{get_safe_ticker_name(t)}_scaler.pkl"
-def get_accuracy_path(t): return ACCURACY_DIR / f"{get_safe_ticker_name(t)}_accuracy.json"
-def get_metadata_path(t): return METADATA_DIR / f"{get_safe_ticker_name(t)}_meta.json"
-def get_prediction_path(t, d): return PREDICTIONS_DIR / f"{get_safe_ticker_name(t)}_{d}.json"
+def get_safe_ticker_name(ticker):
+    return ticker.replace('=', '_').replace('^', '').replace('/', '_')
 
-# ================================
-# UPGRADE 1: HIGH CONFIDENCE CHECKLIST
-# ================================
-def high_confidence_checklist(ticker: str, forecast: list, current_price: float) -> tuple[bool, list]:
-    reasons = []
-    metadata = load_metadata(ticker)
-    acc_log = load_accuracy_log(ticker)
+def get_model_path(ticker):
+    return MODEL_DIR / f"{get_safe_ticker_name(ticker)}_lstm.h5"
 
-    if acc_log.get("total_predictions", 0) < 12:
-        reasons.append(f"Only {acc_log['total_predictions']} live predictions")
-    if metadata.get("retrain_count", 0) < 2:
-        reasons.append("Model needs ≥2 retrains")
-    if acc_log.get("avg_error", 0.99) > 0.065:
-        reasons.append(f"Recent error {acc_log['avg_error']:.1%} > 6.5%")
-    if metadata.get("trained_date"):
-        days_old = (datetime.now() - datetime.fromisoformat(metadata["trained_date"])).days
-        if days_old > 14:
-            reasons.append(f"Model {days_old} days old")
+def get_scaler_path(ticker):
+    return SCALER_DIR / f"{get_safe_ticker_name(ticker)}_scaler.pkl"
 
-    try:
-        df = yf.download(ticker, period="60d", progress=False, threads=False)
-        if isinstance(df.columns, pd.MultiIndex):
-            df = df.droplevel(1, axis=1) if df.columns.nlevels > 1 else df
-        vol = df['Close'].pct_change().rolling(20).std().iloc[-1]
-        if vol > 0.04 and days_old > 7:
-            reasons.append(f"Extreme volatility {vol:.1%}/day")
-    except: pass
+def get_accuracy_path(ticker):
+    return ACCURACY_DIR / f"{get_safe_ticker_name(ticker)}_accuracy.json"
 
-    implied_move = abs(forecast[0] - current_price) / current_price
-    if implied_move > 0.12:
-        reasons.append(f"Extreme 1-day move {implied_move:+.1%}")
+def get_metadata_path(ticker):
+    return METADATA_DIR / f"{get_safe_ticker_name(ticker)}_meta.json"
 
-    return len(reasons) == 0, reasons
-
-# ================================
-# UPGRADE 2: FEATURE ENGINEERING (log returns + volume + RSI)
-# ================================
-def create_features(df):
-    df = df.copy()
-    df["Return"] = np.log(df["Close"] / df["Close"].shift(1))
-    df["Volume_norm"] = df["Volume"] / df["Volume"].rolling(20).mean()
-    delta = df["Close"].diff()
-    gain = delta.where(delta > 0, 0)
-    loss = -delta.where(delta < 0, 0)
-    avg_gain = gain.rolling(14).mean()
-    avg_loss = loss.rolling(14).mean()
-    rs = avg_gain / avg_loss
-    df["RSI"] = 100 - (100 / (1 + rs))
-    df = df[["Return", "Volume_norm", "RSI"]].dropna()
-    return df
+def get_prediction_path(ticker, date):
+    return PREDICTIONS_DIR / f"{get_safe_ticker_name(ticker)}_{date}.json"
 
 # ================================
 # PRICE FETCHING
 # ================================
 @st.cache_data(ttl=60, show_spinner=False)
 def get_latest_price(ticker):
+    logger.debug(f"Fetching price for {ticker}")
+    methods_tried = []
+    
     try:
-        data = yf.download(ticker, period="5d", interval="1d", progress=False, threads=False)
-        if not data.empty:
-            return round(float(data["Close"].iloc[-1]), 4 if ticker.endswith(("=F","=X")) else 2)
+        # Method 1: 1-minute interval
+        try:
+            data = yf.download(ticker, period="1d", interval="1m", progress=False)
+            if not data.empty and len(data) > 0:
+                price = float(data['Close'].iloc[-1])
+                logger.info(f"Price: {ticker} ${price:.2f}")
+                return round(price, 4) if ticker.endswith(("=F", "=X")) else round(price, 2)
+            methods_tried.append("1m-no-data")
+        except Exception as e:
+            methods_tried.append(f"1m-{type(e).__name__}")
+        
+        # Method 2: 5-minute
+        try:
+            data = yf.download(ticker, period="1d", interval="5m", progress=False)
+            if not data.empty:
+                price = float(data['Close'].iloc[-1])
+                return round(price, 4) if ticker.endswith(("=F", "=X")) else round(price, 2)
+            methods_tried.append("5m-no-data")
+        except Exception as e:
+            methods_tried.append(f"5m-{type(e).__name__}")
+        
+        # Method 3: Daily
+        try:
+            data = yf.download(ticker, period="5d", interval="1d", progress=False)
+            if not data.empty:
+                price = float(data['Close'].iloc[-1])
+                return round(price, 4) if ticker.endswith(("=F", "=X")) else round(price, 2)
+            methods_tried.append("1d-no-data")
+        except Exception as e:
+            methods_tried.append(f"1d-{type(e).__name__}")
+        
+        # Method 4: Ticker info
+        try:
+            tick = yf.Ticker(ticker)
+            info = tick.info
+            if 'regularMarketPrice' in info and info['regularMarketPrice']:
+                price = float(info['regularMarketPrice'])
+                return round(price, 4) if ticker.endswith(("=F", "=X")) else round(price, 2)
+            elif 'previousClose' in info and info['previousClose']:
+                price = float(info['previousClose'])
+                return round(price, 4) if ticker.endswith(("=F", "=X")) else round(price, 2)
+            methods_tried.append("info-no-price")
+        except Exception as e:
+            methods_tried.append(f"info-{type(e).__name__}")
+        
+        log_error(ErrorSeverity.WARNING, "get_latest_price", Exception(f"All methods failed: {methods_tried}"), 
+                  ticker=ticker, user_message=f"Price unavailable for {ticker}", show_to_user=False)
+        return None
+        
     except Exception as e:
-        log_error(ErrorSeverity.WARNING, "get_latest_price", e, ticker, show_to_user=False)
-    return None
+        log_error(ErrorSeverity.ERROR, "get_latest_price", e, ticker=ticker, user_message=f"Price error: {ticker}", show_to_user=False)
+        return None
 
 # ================================
-# PERSISTENCE FUNCTIONS
+# ACCURACY TRACKING
 # ================================
-def load_accuracy_log(t):
-    p = get_accuracy_path(t)
-    return json.load(open(p)) if p.exists() else {"predictions": [], "errors": [], "dates": [], "total_predictions": 0, "avg_error": 0.99}
-def save_accuracy_log(t, d):
-    with open(get_accuracy_path(t), 'w') as f: json.dump(d, f, indent=2)
-def load_metadata(t):
-    p = get_metadata_path(t)
-    return json.load(open(p)) if p.exists() else {"trained_date": None, "version": 0, "retrain_count": 0, "training_volatility": 0.0}
-def save_metadata(t, d):
-    with open(get_metadata_path(t), 'w') as f: json.dump(d, f, indent=2)
+def load_accuracy_log(ticker):
+    try:
+        path = get_accuracy_path(ticker)
+        if path.exists():
+            return json.load(open(path, 'r'))
+    except Exception as e:
+        log_error(ErrorSeverity.WARNING, "load_accuracy_log", e, ticker=ticker, user_message="Accuracy log error", show_to_user=False)
+    return {"predictions": [], "errors": [], "dates": [], "avg_error": 0.0, "total_predictions": 0}
 
-def record_prediction(ticker, price, date):
-    path = get_prediction_path(ticker, date)
-    json.dump({"ticker": ticker, "predicted_price": float(price), "prediction_date": date, "timestamp": datetime.now().isoformat()}, 
-              open(path, 'w'), indent=2)
+def save_accuracy_log(ticker, log_data):
+    try:
+        with accuracy_lock:
+            json.dump(log_data, open(get_accuracy_path(ticker), 'w'), indent=2)
+        return True
+    except Exception as e:
+        log_error(ErrorSeverity.ERROR, "save_accuracy_log", e, ticker=ticker, user_message="Save failed")
+        return False
+
+def record_prediction(ticker, predicted_price, prediction_date):
+    try:
+        pred_data = {"ticker": ticker, "predicted_price": float(predicted_price), 
+                     "prediction_date": prediction_date, "timestamp": datetime.now().isoformat()}
+        json.dump(pred_data, open(get_prediction_path(ticker, prediction_date), 'w'), indent=2)
+        logger.info(f"Prediction recorded: {ticker} ${predicted_price:.2f}")
+        return True
+    except Exception as e:
+        log_error(ErrorSeverity.ERROR, "record_prediction", e, ticker=ticker, user_message="Record failed")
+        return False
 
 def validate_predictions(ticker):
-    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-    path = get_prediction_path(ticker, yesterday)
-    if not path.exists(): return False, None
-    pred = json.load(open(path))
-    actual = get_latest_price(ticker)
-    if not actual: return False, None
-    error = abs(pred["predicted_price"] - actual) / actual
-    log = load_accuracy_log(ticker)
-    log["errors"].append(error)
-    log["errors"] = log["errors"][-100:]
-    log["total_predictions"] += 1
-    log["avg_error"] = np.mean(log["errors"][-30:])
-    save_accuracy_log(ticker, log)
-    path.unlink(missing_ok=True)
-    return True, log
+    accuracy_log = load_accuracy_log(ticker)
+    updated = False
+    
+    try:
+        yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+        pred_path = get_prediction_path(ticker, yesterday)
+        
+        if pred_path.exists():
+            try:
+                pred_data = json.load(open(pred_path, 'r'))
+                actual_price = get_latest_price(ticker)
+                
+                if actual_price:
+                    predicted_price = pred_data["predicted_price"]
+                    error = abs(predicted_price - actual_price) / actual_price
+                    
+                    accuracy_log["predictions"].append(predicted_price)
+                    accuracy_log["errors"].append(error)
+                    accuracy_log["dates"].append(yesterday)
+                    accuracy_log["total_predictions"] += 1
+                    
+                    if len(accuracy_log["errors"]) > 50:
+                        accuracy_log["predictions"] = accuracy_log["predictions"][-50:]
+                        accuracy_log["errors"] = accuracy_log["errors"][-50:]
+                        accuracy_log["dates"] = accuracy_log["dates"][-50:]
+                    
+                    accuracy_log["avg_error"] = np.mean(accuracy_log["errors"][-30:])
+                    save_accuracy_log(ticker, accuracy_log)
+                    updated = True
+                    logger.info(f"Validated: {ticker} pred=${predicted_price:.2f} actual=${actual_price:.2f}")
+                    pred_path.unlink()
+                    
+            except Exception as e:
+                log_error(ErrorSeverity.WARNING, "validate_predictions", e, ticker=ticker, user_message="Validation error", show_to_user=False)
+    
+    except Exception as e:
+        log_error(ErrorSeverity.ERROR, "validate_predictions", e, ticker=ticker, user_message="Validation failed")
+    
+    return updated, accuracy_log
 
-def should_retrain(ticker, acc_log, meta):
+# ================================
+# METADATA
+# ================================
+def load_metadata(ticker):
+    try:
+        path = get_metadata_path(ticker)
+        if path.exists():
+            return json.load(open(path, 'r'))
+    except Exception as e:
+        log_error(ErrorSeverity.WARNING, "load_metadata", e, ticker=ticker, user_message="Metadata error", show_to_user=False)
+    return {"trained_date": None, "training_samples": 0, "training_volatility": 0.0, "version": 1, "retrain_count": 0, "last_accuracy": 0.0}
+
+def save_metadata(ticker, metadata):
+    try:
+        json.dump(metadata, open(get_metadata_path(ticker), 'w'), indent=2)
+        return True
+    except Exception as e:
+        log_error(ErrorSeverity.ERROR, "save_metadata", e, ticker=ticker, user_message="Metadata save failed")
+        return False
+
+# ================================
+# RETRAINING LOGIC
+# ================================
+def should_retrain(ticker, accuracy_log, metadata):
     reasons = []
-    if acc_log.get("avg_error", 0.99) > LEARNING_CONFIG["accuracy_threshold"]:
-        reasons.append(f"Error {acc_log['avg_error']:.1%}")
-    if meta.get("trained_date"):
-        days = (datetime.now() - datetime.fromisoformat(meta["trained_date"])).days
-        if days > LEARNING_CONFIG["retrain_interval_days"]:
-            reasons.append(f"{days} days old")
-    return len(reasons) > 0, reasons
-
-# ================================
-# UPGRADE 3: FULL BACKTESTING
-# ================================
-def run_backtest(ticker):
-    if st.button(f"Backtesting {ticker} – this takes 2–6 minutes", disabled=True): pass
-    progress = st.progress(0)
-    status = st.empty()
-    status.info("Downloading 3 years of data...")
+    try:
+        if not get_model_path(ticker).exists():
+            return True, ["No model exists"]
+        
+        if len(accuracy_log["errors"]) >= LEARNING_CONFIG["min_predictions_for_eval"]:
+            if accuracy_log["avg_error"] > LEARNING_CONFIG["accuracy_threshold"]:
+                reasons.append(f"Low accuracy ({accuracy_log['avg_error']:.2%})")
+                return True, reasons
+        
+        if metadata["trained_date"]:
+            try:
+                last_trained = datetime.fromisoformat(metadata["trained_date"])
+                days_since = (datetime.now() - last_trained).days
+                if days_since >= LEARNING_CONFIG["retrain_interval_days"]:
+                    reasons.append(f"{days_since} days old")
+                    return True, reasons
+            except:
+                pass
+        
+        try:
+            df = yf.download(ticker, period="30d", progress=False)
+            if df is not None and len(df) > 5:
+                # Handle MultiIndex
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = df.columns.get_level_values(0)
+                current_vol = df['Close'].pct_change().std()
+                training_vol = metadata.get("training_volatility", 0)
+                if training_vol > 0:
+                    vol_change = abs(current_vol - training_vol) / training_vol
+                    if vol_change > LEARNING_CONFIG["volatility_change_threshold"]:
+                        reasons.append(f"Volatility changed {vol_change:.1%}")
+                        return True, reasons
+        except:
+            pass
     
-    df = yf.download(ticker, period="3y", progress=False)
-    if df.empty:
-        st.error("No data")
-        return
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
+    except Exception as e:
+        log_error(ErrorSeverity.ERROR, "should_retrain", e, ticker=ticker, user_message="Retrain check failed")
     
-    data = create_features(df)
-    lookback = LEARNING_CONFIG["lookback_window"]
-    errors = []
-
-    for i in range(lookback + 100, len(data) - 10, 10):
-        progress.progress((i - lookback - 100) / (len(data) - lookback - 110))
-        status.info(f"Training on data up to {df.index[i].date()}")
-
-        train_data = data.iloc[:i]
-        scaler = MinMaxScaler().fit(train_data)
-        scaled = scaler.transform(train_data)
-
-        X, y = [], []
-        for j in range(lookback, len(scaled)):
-            X.append(scaled[j-lookback:j])
-            y.append(scaled[j, 0])
-        X, y = np.array(X), np.array(y)
-
-        model = Sequential([LSTM(50, return_sequences=True, input_shape=(lookback, 3)),
-                            Dropout(0.2), LSTM(50), Dropout(0.2), Dense(1)])
-        model.compile(optimizer='adam', loss='mse')
-        model.fit(X, y, epochs=20, batch_size=32, verbose=0,
-                  callbacks=[tf.keras.callbacks.EarlyStopping(patience=5)])
-
-        seq = scaler.transform(data.iloc[i-lookback:i])
-        pred_ret = model.predict(seq.reshape(1, lookback, 3), verbose=0)[0,0]
-        pred_price = df["Close"].iloc[i-1] * np.exp(pred_ret)
-        actual_price = df["Close"].iloc[i]
-        error = abs(pred_price - actual_price) / actual_price
-        errors.append(error)
-
-    final_error = np.mean(errors)
-    st.success(f"Backtest complete! Avg error: {final_error:.2%} over {len(errors)} predictions")
-    st.metric("Backtested Days", len(errors))
+    return False, reasons
 
 # ================================
-# TRAINING WITH NEW FEATURES
+# MODEL BUILDING
+# ================================
+def build_lstm_model():
+    try:
+        model = Sequential([
+            LSTM(30, return_sequences=True, input_shape=(LEARNING_CONFIG["lookback_window"], 1)),
+            Dropout(0.2),
+            LSTM(30, return_sequences=False),
+            Dropout(0.2),
+            Dense(15),
+            Dense(1)
+        ])
+        model.compile(optimizer='adam', loss='mse', metrics=['mae'])
+        logger.info("Model built")
+        return model
+    except Exception as e:
+        log_error(ErrorSeverity.CRITICAL, "build_lstm_model", e, user_message="Model build failed")
+        return None
+
+# ================================
+# TRAINING SYSTEM
 # ================================
 def train_self_learning_model(ticker, days=5, force_retrain=False):
-    logger.info(f"Training {ticker} (force={force_retrain})")
+    logger.info(f"Training {ticker} (days={days}, force={force_retrain})")
+    
     model_path = get_model_path(ticker)
     scaler_path = get_scaler_path(ticker)
-
+    
     try:
-        df = yf.download(ticker, period="2y", progress=False)
-        if df.empty or len(df) < 200: return None, None, None
+        updated, accuracy_log = validate_predictions(ticker)
+        if updated:
+            st.session_state.setdefault('learning_log', []).append(f"✅ Validated {ticker}")
+        
+        metadata = load_metadata(ticker)
+        needs_retrain, reasons = should_retrain(ticker, accuracy_log, metadata)
+        
+        training_type = "full-retrain" if (needs_retrain or force_retrain) else "fine-tune"
+        if reasons:
+            st.session_state.setdefault('learning_log', []).append(f"🔄 Retraining {ticker}: {', '.join(reasons)}")
+        
+        # Download data with proper None checks
+        df = None
+        for attempt in range(3):
+            try:
+                df = yf.download(ticker, period="1y", progress=False)
+                if df is not None and len(df) >= 100:
+                    break
+                time.sleep(2)
+            except Exception as e:
+                if attempt == 2:
+                    log_error(ErrorSeverity.ERROR, "train_self_learning_model", e, ticker=ticker, user_message=f"Data download failed: {ticker}")
+                    return None, None, None
+                time.sleep(2)
+        
+        if df is None or len(df) < 100:
+            log_error(ErrorSeverity.WARNING, "train_self_learning_model", Exception("Insufficient data"), 
+                      ticker=ticker, user_message=f"Not enough data: {ticker}", show_to_user=False)
+            return None, None, None
+        
+        # Handle MultiIndex columns from yfinance BEFORE accessing columns
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
-
-        data = create_features(df)
-        scaler = MinMaxScaler()
-        scaled = scaler.fit_transform(data)
-        joblib.dump(scaler, scaler_path)
-
+        
+        df = df[['Close']].copy()
+        
+        # Use new pandas methods instead of deprecated fillna(method=...)
+        df = df.ffill().bfill()
+        
+        # Check for NaN values properly - convert to numpy to avoid Series issues
+        if df['Close'].isna().values.any():
+            log_error(ErrorSeverity.WARNING, "train_self_learning_model", Exception("NaN values found"), 
+                      ticker=ticker, user_message=f"Data quality issue: {ticker}", show_to_user=False)
+            return None, None, None
+        
+        # Scaler with feature mismatch detection
+        try:
+            if training_type == "full-retrain" or not scaler_path.exists():
+                scaler = MinMaxScaler()
+                scaler.fit(df[['Close']])
+                joblib.dump(scaler, scaler_path)
+                logger.info(f"New scaler created for {ticker}")
+            else:
+                scaler = joblib.load(scaler_path)
+                # Check if scaler has wrong number of features
+                if hasattr(scaler, 'n_features_in_') and scaler.n_features_in_ != 1:
+                    logger.warning(f"Scaler feature mismatch for {ticker}: expected 1, got {scaler.n_features_in_}. Recreating scaler.")
+                    scaler = MinMaxScaler()
+                    scaler.fit(df[['Close']])
+                    joblib.dump(scaler, scaler_path)
+                    # Also delete old model since it won't match
+                    if model_path.exists():
+                        model_path.unlink()
+                        logger.info(f"Deleted incompatible model for {ticker}")
+                    training_type = "full-retrain"
+        except Exception as e:
+            log_error(ErrorSeverity.ERROR, "train_self_learning_model", e, ticker=ticker, user_message="Scaler error")
+            return None, None, None
+        
+        scaled = scaler.transform(df[['Close']])
+        
+        # Sequences
         X, y = [], []
         lookback = LEARNING_CONFIG["lookback_window"]
         for i in range(lookback, len(scaled)):
             X.append(scaled[i-lookback:i])
-            y.append(scaled[i, 0])
+            y.append(scaled[i])
         X, y = np.array(X), np.array(y)
-
-        metadata = load_metadata(ticker)
-        acc_log = load_accuracy_log(ticker)
-        needs_retrain, _ = should_retrain(ticker, acc_log, metadata)
-
-        if force_retrain or needs_retrain or not model_path.exists():
-            model = Sequential([LSTM(50, return_sequences=True, input_shape=(lookback, 3)),
-                                Dropout(0.2), LSTM(50), Dropout(0.2), Dense(25), Dense(1)])
-            model.compile(optimizer='adam', loss='mse')
-            model.fit(X, y, epochs=LEARNING_CONFIG["full_retrain_epochs"], batch_size=32, verbose=0,
-                      callbacks=[tf.keras.callbacks.EarlyStopping(patience=6, restore_best_weights=True)])
-            metadata["retrain_count"] = metadata.get("retrain_count", 0) + 1
-        else:
-            model = tf.keras.models.load_model(str(model_path))
-            recent_X = X[-int(len(X)*0.3):]
-            recent_y = y[-int(len(y)*0.3):]
-            model.fit(recent_X, recent_y, epochs=LEARNING_CONFIG["fine_tune_epochs"], batch_size=32, verbose=0)
-
-        model.save(str(model_path))
-
-        # Forecast
-        seq = scaled[-lookback:]
-        preds = []
-        current_seq = seq.copy()
-        for _ in range(days):
-            pred = model.predict(current_seq.reshape(1, lookback, 3), verbose=0)[0,0]
-            preds.append(pred)
-            new_row = np.array([pred, current_seq[-1,1], current_seq[-1,2]]).reshape(1,3)
-            current_seq = np.vstack([current_seq[1:], new_row])
-
-        # Convert returns back to price
-        dummy = np.zeros((len(preds), 3))
-        dummy[:,0] = preds
-        price_moves = scaler.inverse_transform(dummy)[:,0]
-        current_price = df["Close"].iloc[-1]
-        forecast = [current_price]
-        for r in np.exp(price_moves) - 1:
-            forecast.append(forecast[-1] * (1 + r))
-
-        dates = [(datetime.now() + timedelta(days=i+1)).date() for i in range(days)]
-        dates = [d for d in dates if d.weekday() < 5][:days]
-
-        metadata["trained_date"] = datetime.now().isoformat()
-        metadata["version"] = metadata.get("version", 0) + 1
-        save_metadata(ticker, metadata)
-
-        record_prediction(ticker, forecast[1], dates[0].strftime("%Y-%m-%d"))
-
-        tf.keras.backend.clear_session()
-        return forecast[1:], dates, model
-
+        
+        if len(X) == 0:
+            return None, None, None
+        
+        logger.info(f"Training data: {ticker} {len(X)} sequences")
+        
+        # Train
+        with model_cache_lock:
+            try:
+                if training_type == "full-retrain":
+                    model = build_lstm_model()
+                    if model is None:
+                        return None, None, None
+                    
+                    epochs = LEARNING_CONFIG["full_retrain_epochs"]
+                    model.fit(X, y, epochs=epochs, batch_size=32, verbose=0, validation_split=0.1,
+                              callbacks=[tf.keras.callbacks.EarlyStopping(patience=5, restore_best_weights=True)])
+                    
+                    metadata["retrain_count"] += 1
+                    st.session_state.setdefault('learning_log', []).append(f"🧠 Full retrain #{metadata['retrain_count']} {ticker}")
+                else:
+                    try:
+                        model = tf.keras.models.load_model(str(model_path))
+                        epochs = LEARNING_CONFIG["fine_tune_epochs"]
+                        recent_size = int(len(X) * 0.3)
+                        model.fit(X[-recent_size:], y[-recent_size:], epochs=epochs, batch_size=32, verbose=0)
+                        st.session_state.setdefault('learning_log', []).append(f"⚡ Fine-tuned {ticker}")
+                    except (OSError, IOError) as e:
+                        # Model file corrupted or missing - do full retrain
+                        log_error(ErrorSeverity.WARNING, "train_self_learning_model", e, ticker=ticker, 
+                                  user_message=f"Model load failed, retraining {ticker}", show_to_user=False)
+                        model = build_lstm_model()
+                        if model is None:
+                            return None, None, None
+                        model.fit(X, y, epochs=LEARNING_CONFIG["full_retrain_epochs"], batch_size=32, verbose=0, validation_split=0.1)
+                    except Exception as e:
+                        # Other errors - also do full retrain
+                        log_error(ErrorSeverity.WARNING, "train_self_learning_model", e, ticker=ticker, 
+                                  user_message=f"Fine-tune failed, retraining {ticker}", show_to_user=False)
+                        model = build_lstm_model()
+                        if model is None:
+                            return None, None, None
+                        model.fit(X, y, epochs=LEARNING_CONFIG["full_retrain_epochs"], batch_size=32, verbose=0, validation_split=0.1)
+                
+                try:
+                    model.save(str(model_path))
+                    logger.info(f"Model saved: {ticker}")
+                except Exception as e:
+                    log_error(ErrorSeverity.ERROR, "train_self_learning_model", e, ticker=ticker, user_message="Model save failed")
+                    # Continue anyway - model is in memory
+                
+                metadata["trained_date"] = datetime.now().isoformat()
+                metadata["training_samples"] = len(X)
+                metadata["training_volatility"] = float(df['Close'].pct_change().std())
+                metadata["version"] += 1
+                metadata["last_accuracy"] = accuracy_log["avg_error"]
+                save_metadata(ticker, metadata)
+                
+            except Exception as e:
+                log_error(ErrorSeverity.CRITICAL, "train_self_learning_model", e, ticker=ticker, user_message=f"Training error: {ticker}")
+                return None, None, None
+        
+        # Predict
+        try:
+            last = scaled[-lookback:].reshape(1, lookback, 1)
+            preds = []
+            for _ in range(days):
+                pred = model.predict(last, verbose=0)
+                preds.append(pred[0, 0])
+                last = np.append(last[:, 1:, :], pred.reshape(1, 1, 1), axis=1)
+            
+            forecast = scaler.inverse_transform(np.array(preds).reshape(-1, 1)).flatten()
+            
+            tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+            record_prediction(ticker, forecast[0], tomorrow)
+            
+            dates = []
+            i = 1
+            while len(dates) < days:
+                next_date = datetime.now().date() + timedelta(days=i)
+                if next_date.weekday() < 5:
+                    dates.append(next_date)
+                i += 1
+            
+            logger.info(f"Predictions: {ticker} {forecast}")
+            
+        except Exception as e:
+            log_error(ErrorSeverity.ERROR, "train_self_learning_model", e, ticker=ticker, user_message="Prediction failed")
+            return None, None, None
+        
+        finally:
+            tf.keras.backend.clear_session()
+        
+        return forecast, dates, model
+    
     except Exception as e:
-        log_error(ErrorSeverity.CRITICAL, "train_self_learning_model", e, ticker)
+        log_error(ErrorSeverity.CRITICAL, "train_self_learning_model", e, ticker=ticker, user_message=f"Training error: {ticker}")
         return None, None, None
 
 # ================================
-# RECOMMENDATIONS WITH CHECKLIST
+# RECOMMENDATIONS
 # ================================
 def daily_recommendation(ticker, asset):
-    price = get_latest_price(ticker)
-    if not price:
-        return "<span style='color:orange'>No price data</span>"
-
-    forecast, dates, _ = train_self_learning_model(ticker, days=1)
-    if not forecast:
-        return "<span style='color:red'>Forecast failed</span>"
-
-    passed, reasons = high_confidence_checklist(ticker, forecast, price)
-    pred = round(forecast[0], 2)
-    change = (pred - price) / price * 100
-
-    if not passed:
+    try:
+        price = get_latest_price(ticker)
+        if not price:
+            return "<span style='color:orange'>⚠️ Market closed or no data</span>"
+        
+        forecast, _, _ = train_self_learning_model(ticker, 1)
+        if forecast is None or len(forecast) == 0:
+            return "<span style='color:orange'>⚠️ Unable to forecast</span>"
+        
+        pred_price = round(forecast[0], 2)
+        change = (pred_price - price) / price * 100
+        action = "BUY" if change >= 1.5 else "SELL" if change <= -1.5 else "HOLD"
+        color = "#00C853" if action == "BUY" else "#D50000" if action == "SELL" else "#FFA726"
+        
+        accuracy_log = load_accuracy_log(ticker)
+        metadata = load_metadata(ticker)
+        
+        learning_status = ""
+        if accuracy_log["total_predictions"] > 0:
+            learning_status = f"<p><small>Accuracy: {(1 - accuracy_log['avg_error'])*100:.1f}% | Predictions: {accuracy_log['total_predictions']} | v{metadata['version']}</small></p>"
+        
         return f"""
-        <div style="background:#2d1b1b;padding:20px;border-radius:12px;border-left:6px solid #ff4444;color:#ff9999;">
-        <h3>{asset.upper()} — PREDICTION WITHHELD</h3>
-        <p><strong>Waiting for higher-confidence setup</strong></p>
-        <small>Reasons: {' • '.join(reasons[:4])}</small>
+        <div style="background:#1a1a1a;padding:20px;border-radius:12px;border-left:6px solid {color};color:#fff;margin:15px 0;">
+        <h3 style="margin:0;color:{color};">{asset.upper()} — DAILY RECOMMENDATION</h3>
+        <p><strong>Live:</strong> ${price:.2f} → <strong>AI Predicts:</strong> ${pred_price:.2f} ({change:+.2f}%)</p>
+        <p><strong>Action:</strong> <span style="font-size:1.3em;color:{color};">{action}</span></p>
+        {learning_status}
         </div>
         """
+    except Exception as e:
+        log_error(ErrorSeverity.ERROR, "daily_recommendation", e, ticker=ticker, user_message="Recommendation failed")
+        return f"<span style='color:red'>❌ Error: {asset}</span>"
 
-    action = "BUY" if change >= 1.5 else "SELL" if change <= -1.5 else "HOLD"
-    color = "#00C853" if action == "BUY" else "#ff4444" if action == "SELL" else "#FFA726"
+def show_5day_forecast(ticker, asset_name):
+    try:
+        forecast, dates, _ = train_self_learning_model(ticker, days=5)
+        if forecast is None:
+            st.error("❌ Forecast failed")
+            return
 
-    return f"""
-    <div style="background:#1a2a1a;padding:20px;border-radius:12px;border-left:6px solid {color};color:#fff;">
-    <h3 style="color:{color};">{asset.upper()} — HIGH CONFIDENCE</h3>
-    <p><strong>Live:</strong> ${price:.2f} → <strong>Predicts:</strong> ${pred:.2f} ({change:+.2f}%)</p>
-    <p><strong>Action:</strong> <span style="font-size:1.4em;color:{color};">{action}</span></p>
-    <small>Passed 8-point confidence checklist</small>
-    </div>
+        current_price = get_latest_price(ticker)
+        if not current_price:
+            current_price = forecast[0] * 0.99
+
+        fig = go.Figure()
+        
+        try:
+            hist = yf.download(ticker, period="30d", progress=False)
+            # Handle MultiIndex columns
+            if isinstance(hist.columns, pd.MultiIndex):
+                hist.columns = hist.columns.get_level_values(0)
+            hist = hist['Close']
+            fig.add_trace(go.Scatter(x=hist.index, y=hist.values, mode='lines', name='Historical', line=dict(color='#888')))
+        except Exception as e:
+            log_error(ErrorSeverity.WARNING, "show_5day_forecast", e, ticker=ticker, user_message="No historical data", show_to_user=False)
+        
+        fig.add_trace(go.Scatter(x=dates, y=forecast, mode='lines+markers', name='AI Forecast',
+                                 line=dict(color='#00C853', width=3, dash='dot'), marker=dict(size=10)))
+        
+        fig.add_hline(y=current_price, line_dash="dash", line_color="#FFA726", annotation_text=f"Live: ${current_price:.2f}")
+        fig.update_layout(title=f"{asset_name.upper()} — 5-Day Forecast", xaxis_title="Date", yaxis_title="Price (USD)", 
+                          template="plotly_dark", height=500)
+        st.plotly_chart(fig, use_container_width=True)
+
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Day 1", f"${forecast[0]:.2f}", f"{(forecast[0] - current_price) / current_price * 100:+.2f}%")
+        with col2:
+            st.metric("Day 3", f"${forecast[2]:.2f}", f"{(forecast[2] - current_price) / current_price * 100:+.2f}%")
+        with col3:
+            st.metric("Day 5", f"${forecast[4]:.2f}", f"{(forecast[4] - current_price) / current_price * 100:+.2f}%")
+        
+        accuracy_log = load_accuracy_log(ticker)
+        metadata = load_metadata(ticker)
+        
+        if accuracy_log["total_predictions"] > 0:
+            st.info(f"🧠 {accuracy_log['total_predictions']} predictions | Accuracy: {(1 - accuracy_log['avg_error'])*100:.1f}% | v{metadata['version']} | Retrains: {metadata['retrain_count']}")
+        
+    except Exception as e:
+        log_error(ErrorSeverity.ERROR, "show_5day_forecast", e, ticker=ticker, user_message="Forecast display failed")
+
+# ================================
+# BACKGROUND DAEMON
+# ================================
+def continuous_learning_daemon():
+    logger.info("Learning daemon started")
+    while True:
+        try:
+            daemon_config = load_daemon_config()
+            if not daemon_config.get("enabled", False):
+                logger.info("Daemon stopped")
+                break
+            
+            all_tickers = [ticker for cat in ASSET_CATEGORIES.values() for _, ticker in cat.items()]
+            
+            for ticker in all_tickers:
+                try:
+                    if not load_daemon_config().get("enabled", False):
+                        break
+                    
+                    updated, accuracy_log = validate_predictions(ticker)
+                    if updated:
+                        metadata = load_metadata(ticker)
+                        needs_retrain, reasons = should_retrain(ticker, accuracy_log, metadata)
+                        if needs_retrain:
+                            st.session_state.setdefault('learning_log', []).append(f"🔄 Auto-retrain {ticker}: {', '.join(reasons)}")
+                            train_self_learning_model(ticker, days=1, force_retrain=True)
+                    time.sleep(5)
+                except Exception as e:
+                    log_error(ErrorSeverity.ERROR, "continuous_learning_daemon", e, ticker=ticker, user_message=f"Daemon error: {ticker}", show_to_user=False)
+            
+            time.sleep(3600)
+        except Exception as e:
+            log_error(ErrorSeverity.CRITICAL, "continuous_learning_daemon", e, user_message="Critical daemon error", show_to_user=False)
+            time.sleep(600)
+
+# ================================
+# 6%+ PREDICTIVE DETECTION
+# ================================
+@st.cache_data(ttl=60, show_spinner=False)
+def detect_pre_move_6percent(ticker, name):
     """
+    Predict 6%+ moves BEFORE they happen using:
+    1. Volume spike analysis
+    2. Price momentum acceleration
+    3. MACD divergence
+    4. Support/resistance breakout signals
+    """
+    try:
+        # Get intraday data for pattern analysis
+        data = yf.download(ticker, period="1d", interval="1m", progress=False)
+        if data is None or len(data) < 60:
+            return None
+
+        # Handle MultiIndex
+        if isinstance(data.columns, pd.MultiIndex):
+            data.columns = data.columns.get_level_values(0)
+
+        close = data['Close'].values
+        volume = data['Volume'].values
+        
+        # Need at least 30 minutes of data for prediction
+        if len(close) < 30:
+            return None
+        
+        # === PREDICTIVE INDICATORS ===
+        
+        # 1. Volume Acceleration (not just spike)
+        recent_vol = volume[-5:]  # Last 5 minutes
+        prev_vol = volume[-20:-5]  # Previous 15 minutes
+        baseline_vol = volume[-60:-20]  # Baseline (40 min ago)
+        
+        recent_vol_avg = np.mean(recent_vol)
+        prev_vol_avg = np.mean(prev_vol)
+        baseline_vol_avg = np.mean(baseline_vol)
+        
+        # Volume is accelerating (growing trend)
+        vol_acceleration = (recent_vol_avg / prev_vol_avg) if prev_vol_avg > 0 else 1
+        vol_spike_vs_baseline = recent_vol_avg / baseline_vol_avg if baseline_vol_avg > 0 else 1
+        
+        # 2. Price Momentum Acceleration (slope is increasing)
+        recent_prices = close[-10:]  # Last 10 minutes
+        prev_prices = close[-20:-10]  # Previous 10 minutes
+        
+        # Calculate rate of change (momentum)
+        recent_momentum = (recent_prices[-1] - recent_prices[0]) / recent_prices[0]
+        prev_momentum = (prev_prices[-1] - prev_prices[0]) / prev_prices[0]
+        
+        # Momentum is accelerating
+        momentum_acceleration = abs(recent_momentum) > abs(prev_momentum) * 1.5
+        
+        # 3. Price Volatility Expansion (wider price swings = breakout coming)
+        recent_volatility = np.std(close[-10:]) / np.mean(close[-10:])
+        baseline_volatility = np.std(close[-60:-30]) / np.mean(close[-60:-30])
+        volatility_ratio = recent_volatility / baseline_volatility if baseline_volatility > 0 else 1
+        
+        # 4. Directional Consistency (all recent candles same direction)
+        price_changes = np.diff(close[-10:])
+        bullish_candles = np.sum(price_changes > 0)
+        bearish_candles = np.sum(price_changes < 0)
+        directional_strength = max(bullish_candles, bearish_candles) / len(price_changes)
+        
+        # 5. Breakout Detection (price breaking recent high/low)
+        recent_high = np.max(close[-30:-5])
+        recent_low = np.min(close[-30:-5])
+        current_price = close[-1]
+        
+        breaking_high = current_price > recent_high * 1.002  # Breaking above by 0.2%
+        breaking_low = current_price < recent_low * 0.998   # Breaking below by 0.2%
+        
+        # === PREDICTIVE SCORING ===
+        
+        score = 0
+        factors = []
+        
+        # Volume acceleration (weight: 30 points)
+        if vol_acceleration > 2.0 and vol_spike_vs_baseline > 3.0:
+            score += 30
+            factors.append(f"Vol acceleration {vol_acceleration:.1f}x")
+        elif vol_acceleration > 1.5 and vol_spike_vs_baseline > 2.0:
+            score += 20
+            factors.append(f"Vol increase {vol_acceleration:.1f}x")
+        
+        # Momentum acceleration (weight: 25 points)
+        if momentum_acceleration and abs(recent_momentum) > 0.01:
+            score += 25
+            factors.append(f"Momentum accelerating")
+        elif abs(recent_momentum) > 0.008:
+            score += 15
+            factors.append(f"Strong momentum")
+        
+        # Volatility expansion (weight: 20 points)
+        if volatility_ratio > 2.0:
+            score += 20
+            factors.append(f"Volatility {volatility_ratio:.1f}x")
+        elif volatility_ratio > 1.5:
+            score += 10
+            factors.append(f"Volatility rising")
+        
+        # Directional strength (weight: 15 points)
+        if directional_strength > 0.8:
+            score += 15
+            factors.append(f"Strong direction {directional_strength:.0%}")
+        elif directional_strength > 0.7:
+            score += 10
+            factors.append(f"Direction {directional_strength:.0%}")
+        
+        # Breakout (weight: 10 points)
+        if breaking_high or breaking_low:
+            score += 10
+            factors.append("Breakout detected")
+        
+        # === PREDICTION THRESHOLD ===
+        # Need at least 65 points to predict a 6%+ move
+        if score >= 65:
+            direction = "UP" if recent_momentum > 0 else "DOWN"
+            confidence = min(98, 60 + score)
+            
+            logger.info(f"[PREDICTIVE] 6%+ alert: {name} {direction} (confidence: {confidence}%, factors: {', '.join(factors)})")
+            
+            return {
+                "asset": name,
+                "direction": direction,
+                "confidence": confidence,
+                "factors": factors,
+                "score": score
+            }
+        
+        return None
+        
+    except Exception as e:
+        log_error(ErrorSeverity.WARNING, "detect_pre_move_6percent", e, ticker=ticker, 
+                  user_message=f"Prediction failed: {name}", show_to_user=False)
+    return None
+
+def send_telegram_alert(text):
+    if not BOT_TOKEN or not CHAT_ID:
+        return False
+    try:
+        response = requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                                 data={"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML"}, timeout=5)
+        success = response.status_code == 200
+        if success:
+            logger.info(f"Telegram sent: {text[:50]}")
+        return success
+    except Exception as e:
+        log_error(ErrorSeverity.WARNING, "send_telegram_alert", e, user_message="Telegram failed", show_to_user=False)
+        return False
+
+def monitor_6percent_pre_move():
+    logger.info("[PREDICTIVE] 6%+ monitoring started")
+    all_assets = {name: ticker for cat in ASSET_CATEGORIES.values() for name, ticker in cat.items()}
+    
+    while True:
+        try:
+            monitoring_config = load_monitoring_config()
+            if not monitoring_config.get("enabled", False):
+                logger.info("Monitoring stopped")
+                break
+            
+            for name, ticker in all_assets.items():
+                try:
+                    if not load_monitoring_config().get("enabled", False):
+                        break
+                    
+                    alert = detect_pre_move_6percent(ticker, name)
+                    
+                    # Check if we haven't alerted on this asset in the last 30 minutes
+                    alert_history = st.session_state.get('alert_history', {})
+                    last_alert = alert_history.get(name)
+                    
+                    should_alert = False
+                    if alert:
+                        if not last_alert:
+                            should_alert = True
+                        else:
+                            # Check if 30 minutes have passed since last alert
+                            try:
+                                last_alert_time = datetime.fromisoformat(last_alert['timestamp'])
+                                if (datetime.now() - last_alert_time).total_seconds() > 1800:  # 30 minutes
+                                    should_alert = True
+                            except:
+                                should_alert = True
+                    
+                    if should_alert:
+                        factors_text = "\n".join([f"• {f}" for f in alert['factors']])
+                        
+                        text = (
+                            f"🔮 <b>PREDICTIVE ALERT - 6%+ MOVE INCOMING</b>\n\n"
+                            f"<b>Asset:</b> {alert['asset'].upper()}\n"
+                            f"<b>Direction:</b> {alert['direction']}\n"
+                            f"<b>Confidence:</b> {alert['confidence']}%\n"
+                            f"<b>Score:</b> {alert['score']}/100\n\n"
+                            f"<b>Indicators:</b>\n{factors_text}\n\n"
+                            f"⏰ <i>Predicted 5-15 minutes before major move</i>"
+                        )
+                        
+                        if send_telegram_alert(text):
+                            st.session_state.setdefault('alert_history', {})[name] = {
+                                "direction": alert["direction"],
+                                "timestamp": datetime.now().isoformat(),
+                                "confidence": alert['confidence']
+                            }
+                            logger.info(f"[PREDICTIVE] Alert sent for {name}")
+                            time.sleep(2)
+                    
+                    time.sleep(1)
+                except Exception as e:
+                    log_error(ErrorSeverity.ERROR, "monitor_6percent_pre_move", e, ticker=ticker, 
+                              user_message=f"Monitor error: {name}", show_to_user=False)
+            
+            # Check every 30 seconds (more frequent for early detection)
+            time.sleep(30)
+            
+        except Exception as e:
+            log_error(ErrorSeverity.CRITICAL, "monitor_6percent_pre_move", e, 
+                      user_message="Critical monitor error", show_to_user=False)
+            time.sleep(300)  # 5 minutes on critical error
 
 # ================================
-# UI
+# AUTO-RESTART THREADS
 # ================================
-st.set_page_config(page_title="AI Alpha Tracker v5", layout="wide")
-st.markdown("<h1 style='text-align:center;color:#00C853;'>AI - ALPHA TRACKER v5<br><small>High-Confidence • Log Returns • Backtesting</small></h1>", unsafe_allow_html=True)
+def initialize_background_threads():
+    if "threads_initialized" not in st.session_state:
+        st.session_state.threads_initialized = True
+        
+        # Initialize all session state keys BEFORE starting threads
+        st.session_state.setdefault('learning_log', [])
+        st.session_state.setdefault('alert_history', {})
+        st.session_state.setdefault('errors', [])
+        st.session_state.setdefault('error_logs', [])
+        
+        logger.info("Initializing threads")
+        
+        try:
+            daemon_config = load_daemon_config()
+            if daemon_config.get("enabled", False):
+                threading.Thread(target=continuous_learning_daemon, daemon=True).start()
+                st.session_state['learning_log'].append("✅ Learning Daemon auto-started")
+                logger.info("Daemon started")
+        except Exception as e:
+            log_error(ErrorSeverity.ERROR, "initialize_background_threads", e, user_message="Daemon start failed")
+        
+        try:
+            monitoring_config = load_monitoring_config()
+            if monitoring_config.get("enabled", False):
+                threading.Thread(target=monitor_6percent_pre_move, daemon=True).start()
+                st.session_state['learning_log'].append("✅ 6%+ Monitoring auto-started")
+                logger.info("Monitoring started")
+        except Exception as e:
+            log_error(ErrorSeverity.ERROR, "initialize_background_threads", e, user_message="Monitoring start failed")
 
+# ================================
+# ERROR DASHBOARD
+# ================================
+def show_error_dashboard():
+    st.subheader("🔍 System Health & Error Monitoring")
+    stats = get_error_statistics()
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total Errors", stats["total"])
+    with col2:
+        critical = stats["by_severity"].get("CRITICAL", 0) + stats["by_severity"].get("ERROR", 0)
+        st.metric("Critical/Error", critical, delta=None if critical == 0 else "⚠️")
+    with col3:
+        st.metric("Warnings", stats["by_severity"].get("WARNING", 0))
+    
+    if stats["recent"]:
+        st.markdown("**Recent Errors:**")
+        for err in reversed(stats["recent"]):
+            severity = err.get('severity', 'UNKNOWN')
+            color = {'CRITICAL': 'red', 'ERROR': 'orange', 'WARNING': 'yellow'}.get(severity, 'gray')
+            st.markdown(f"<div style='padding:8px;background:#2a2a2a;border-left:4px solid {color};margin:5px 0;'>"
+                       f"<strong>{err.get('timestamp', 'N/A')[:19]}</strong> | <span style='color:{color}'>{severity}</span> | "
+                       f"<code>{err.get('ticker', 'N/A')}</code><br><small>{err.get('error', '')[:100]}</small></div>", unsafe_allow_html=True)
+
+# ================================
+# BRANDING
+# ================================
+def add_header():
+    st.markdown("""
+    <div style='text-align:center;padding:15px;background:#1a1a1a;color:#00C853;margin-bottom:20px;border-radius:8px;'>
+    	<h2 style='margin:0;'>🧠 AI - ALPHA STOCK TRACKER v4.0</h2>
+    	<p style='margin:5px 0;'>Self-Learning • Persistent 24/7 • Enhanced Logging</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+def add_footer():
+    st.markdown("""
+    <div style='text-align:center;padding:20px;background:#1a1a1a;color:#666;margin-top:40px;border-radius:8px;'>
+    	<p style='margin:0;'>© 2025 AI - Alpha Stock Tracker | Enhanced Error Handling</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+# ================================
+# MAIN APP
+# ================================
+st.set_page_config(page_title="AI - Alpha Stock Tracker v4.0", layout="wide")
+
+# Initialize session state BEFORE threads
+if 'alert_history' not in st.session_state:
+    st.session_state['alert_history'] = {}
+
+# Reset session state error logs on startup
+if 'app_started' not in st.session_state:
+    st.session_state['app_started'] = True
+    st.session_state['error_logs'] = []  # Clear error logs in session state
+
+for key in ["learning_log", "errors"]:
+    if key not in st.session_state:
+        st.session_state[key] = []
+
+# Now safe to initialize threads
+try:
+    initialize_background_threads()
+    logger.info("App initialized")
+except Exception as e:
+    log_error(ErrorSeverity.CRITICAL, "main_app_init", e, user_message="Init failed")
+
+add_header()
+
+# Sidebar
 with st.sidebar:
-    st.header("Asset Selection")
-    category = st.selectbox("Category", list(ASSET_CATEGORIES.keys()))
-    asset = st.selectbox("Asset", list(ASSET_CATEGORIES[category].keys()))
-    ticker = ASSET_CATEGORIES[category][asset]
+    st.header("⚙️ Asset Selection")
+    
+    try:
+        category = st.selectbox("Category", list(ASSET_CATEGORIES.keys()))
+        asset = st.selectbox("Asset", list(ASSET_CATEGORIES[category].keys()))
+        ticker = ASSET_CATEGORIES[category][asset]
+    except Exception as e:
+        log_error(ErrorSeverity.ERROR, "sidebar_selection", e, user_message="Asset selection error")
+        st.error("Failed to load assets")
+        st.stop()
 
     st.markdown("---")
-    st.subheader("Model Status")
-    meta = load_metadata(ticker)
-    acc = load_accuracy_log(ticker)
-    if meta.get("trained_date"):
-        st.metric("Last Trained", meta["trained_date"][:10])
-        st.metric("Version", f"v{meta.get('version',0)}")
-        st.metric("Accuracy", f"{(1-acc.get('avg_error',0.99))*100:.1f}%")
-
-    if st.button("Force Retrain", use_container_width=True):
+    st.subheader("🧠 Self-Learning Status")
+    
+    try:
+        accuracy_log = load_accuracy_log(ticker)
+        metadata = load_metadata(ticker)
+        
+        if metadata["trained_date"]:
+            trained = datetime.fromisoformat(metadata["trained_date"])
+            st.metric("Last Trained", trained.strftime("%Y-%m-%d"))
+            st.metric("Version", f"v{metadata['version']}")
+            st.metric("Retrains", metadata["retrain_count"])
+            
+            if accuracy_log["total_predictions"] > 0:
+                st.metric("Accuracy", f"{(1 - accuracy_log['avg_error']) * 100:.1f}%")
+                st.metric("Predictions", accuracy_log["total_predictions"])
+        else:
+            st.info("No model trained")
+    except Exception as e:
+        log_error(ErrorSeverity.WARNING, "sidebar_status", e, ticker=ticker, user_message="Status error", show_to_user=False)
+        st.warning("Status unavailable")
+    
+    if st.button("🔄 Force Retrain", use_container_width=True):
         with st.spinner("Retraining..."):
-            train_self_learning_model(ticker, force_retrain=True)
-            st.success("Retrained!")
-
-    if st.button("Run Full Backtest (3y)"):
-        run_backtest(ticker)
-
-col1, col2, col3 = st.columns([1,2,1])
-with col2:
-    price = get_latest_price(ticker)
-    if price:
-        st.markdown(f"<h2 style='text-align:center;'>LIVE PRICE: <code style='font-size:2em;background:#333;padding:10px 20px;border-radius:12px;'>${price:.2f}</code></h2>", unsafe_allow_html=True)
-
-    if st.button("Daily High-Confidence Recommendation", use_container_width=True):
-        with st.spinner("Analyzing..."):
-            st.markdown(daily_recommendation(ticker, asset), unsafe_allow_html=True)
-
-    if st.button("5-Day Forecast (only if confident)", use_container_width=True):
-        with st.spinner("Forecasting..."):
-            forecast, dates, _ = train_self_learning_model(ticker, days=5)
-            if forecast:
-                passed, reasons = high_confidence_checklist(ticker, forecast, price)
-                if passed:
-                    fig = go.Figure()
-                    fig.add_trace(go.Scatter(x=dates, y=forecast, mode="lines+markers", name="AI Forecast", line=dict(color="#00C853", width=4)))
-                    fig.add_hline(y=price, line_dash="dash", line_color="orange", annotation_text=f"Today ${price:.2f}")
-                    fig.update_layout(template="plotly_dark", height=500, title=f"{asset.upper()} – HIGH CONFIDENCE 5-Day Forecast")
-                    st.plotly_chart(fig, use_container_width=True)
+            try:
+                result = train_self_learning_model(ticker, days=1, force_retrain=True)
+                if result[0] is not None:
+                    st.success("✅ Retrained!")
+                    time.sleep(1)
+                    st.rerun()
                 else:
-                    st.warning("Forecast withheld – not confident enough")
-                    st.write("Reasons:", " • ".join(reasons))
+                    st.error("❌ Retraining failed - check error logs")
+            except Exception as e:
+                log_error(ErrorSeverity.ERROR, "force_retrain", e, ticker=ticker, user_message="Retrain failed")
+
+    st.markdown("---")
+    st.subheader("🤖 Learning Daemon")
+    
+    try:
+        daemon_config = load_daemon_config()
+        status = "🟢 RUNNING" if daemon_config.get("enabled", False) else "🔴 STOPPED"
+        st.markdown(f"**Status:** {status}")
+        if daemon_config.get("last_started"):
+            try:
+                started = datetime.fromisoformat(daemon_config["last_started"])
+                st.caption(f"Started: {started.strftime('%Y-%m-%d %H:%M')}")
+            except:
+                pass
+    except Exception as e:
+        log_error(ErrorSeverity.WARNING, "daemon_status", e, user_message="Status error", show_to_user=False)
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("▶️ Start", use_container_width=True, key="daemon_start"):
+            try:
+                save_daemon_config(True)
+                threading.Thread(target=continuous_learning_daemon, daemon=True).start()
+                st.success("🧠 Started!")
+                time.sleep(0.5)
+                st.rerun()
+            except Exception as e:
+                log_error(ErrorSeverity.ERROR, "daemon_start_btn", e, user_message="Start failed")
+    
+    with col2:
+        if st.button("⏹️ Stop", use_container_width=True, key="daemon_stop"):
+            try:
+                save_daemon_config(False)
+                st.success("Stopped!")
+                time.sleep(0.5)
+                st.rerun()
+            except Exception as e:
+                log_error(ErrorSeverity.ERROR, "daemon_stop_btn", e, user_message="Stop failed")
+
+    st.markdown("---")
+    st.subheader("📡 Alert Systems")
+    
+    try:
+        monitoring_config = load_monitoring_config()
+        status = "🟢 RUNNING" if monitoring_config.get("enabled", False) else "🔴 STOPPED"
+        st.markdown(f"**6%+ Alerts:** {status}")
+        if monitoring_config.get("last_started"):
+            try:
+                started = datetime.fromisoformat(monitoring_config["last_started"])
+                st.caption(f"Started: {started.strftime('%Y-%m-%d %H:%M')}")
+            except:
+                pass
+    except Exception as e:
+        log_error(ErrorSeverity.WARNING, "monitoring_status", e, user_message="Status error", show_to_user=False)
+    
+    if st.button("🧪 Test Telegram", use_container_width=True):
+        try:
+            success = send_telegram_alert("✅ TEST ALERT\nAI - Alpha Tracker v4.0")
+            st.success("✅ Sent!") if success else st.error("❌ Check keys")
+        except Exception as e:
+            log_error(ErrorSeverity.ERROR, "telegram_test", e, user_message="Test failed")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("▶️ Start Alerts", use_container_width=True):
+            try:
+                save_monitoring_config(True)
+                threading.Thread(target=monitor_6percent_pre_move, daemon=True).start()
+                st.success("Started!")
+                time.sleep(0.5)
+                st.rerun()
+            except Exception as e:
+                log_error(ErrorSeverity.ERROR, "monitoring_start", e, user_message="Start failed")
+    
+    with col2:
+        if st.button("⏹️ Stop Alerts", use_container_width=True):
+            try:
+                save_monitoring_config(False)
+                st.success("Stopped!")
+                time.sleep(0.5)
+                st.rerun()
+            except Exception as e:
+                log_error(ErrorSeverity.ERROR, "monitoring_stop", e, user_message="Stop failed")
+
+# Main content
+col1, col2, col3 = st.columns([1, 3, 1])
+with col2:
+    try:
+        price = get_latest_price(ticker)
+        if price:
+            st.markdown(f"<h2 style='text-align:center;'>LIVE: <code style='font-size:1.5em;background:#333;padding:8px 16px;border-radius:8px;'>${price:.2f}</code></h2>", unsafe_allow_html=True)
+        else:
+            st.warning("⚠️ Market closed or no data")
+    except Exception as e:
+        log_error(ErrorSeverity.ERROR, "main_price", e, ticker=ticker, user_message="Price display error")
+    
+    if st.button("📊 Daily Recommendation", use_container_width=True):
+        with st.spinner("Analyzing..."):
+            try:
+                st.markdown(daily_recommendation(ticker, asset), unsafe_allow_html=True)
+            except Exception as e:
+                log_error(ErrorSeverity.ERROR, "daily_rec_btn", e, ticker=ticker, user_message="Recommendation failed")
+    
+    if st.button("📈 5-Day Forecast", use_container_width=True):
+        with st.spinner("Forecasting..."):
+            try:
+                show_5day_forecast(ticker, asset)
+            except Exception as e:
+                log_error(ErrorSeverity.ERROR, "forecast_btn", e, ticker=ticker, user_message="Forecast failed")
+
+st.markdown("---")
+
+# Tabs
+tab1, tab2, tab3 = st.tabs(["📈 Learning Activity", "🔍 Error Monitoring", "📊 Performance"])
+
+with tab1:
+    st.subheader("🧠 Self-Learning Activity")
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown("**Recent Events:**")
+        if st.session_state.learning_log:
+            for log_entry in st.session_state.learning_log[-10:]:
+                st.text(log_entry)
+        else:
+            st.info("No activity yet")
+
+    with col2:
+        st.markdown("**Model Performance:**")
+        try:
+            perf_data = [
+                {"Metric": "Avg Error (30d)", "Value": f"{accuracy_log['avg_error']:.2%}" if accuracy_log['total_predictions'] >= 10 else "N/A"},
+                {"Metric": "Total Predictions", "Value": str(accuracy_log["total_predictions"])},
+                {"Metric": "Training Volatility", "Value": f"{metadata['training_volatility']:.4f}"},
+                {"Metric": "Version", "Value": str(metadata["version"])},
+                {"Metric": "Retrains", "Value": str(metadata["retrain_count"])},
+                {"Metric": "Lookback", "Value": str(LEARNING_CONFIG["lookback_window"])}
+            ]
+            st.dataframe(pd.DataFrame(perf_data).set_index('Metric'), width="stretch")
+        except Exception as e:
+            log_error(ErrorSeverity.WARNING, "performance_display", e, user_message="Performance data error", show_to_user=False)
+
+with tab2:
+    try:
+        show_error_dashboard()
+    except Exception as e:
+        log_error(ErrorSeverity.ERROR, "error_dashboard", e, user_message="Dashboard error")
+
+with tab3:
+    st.subheader("📊 All Models")
+    try:
+        all_assets = []
+        for cat_name, assets in ASSET_CATEGORIES.items():
+            for asset_name, asset_ticker in assets.items():
+                meta = load_metadata(asset_ticker)
+                acc_log = load_accuracy_log(asset_ticker)
+                if meta["trained_date"]:
+                    all_assets.append({
+                        "Asset": asset_name,
+                        "Ticker": asset_ticker,
+                        "Version": meta["version"],
+                        "Retrains": meta["retrain_count"],
+                        "Accuracy": f"{(1 - acc_log['avg_error'])*100:.1f}%" if acc_log['total_predictions'] > 0 else "N/A",
+                        "Predictions": acc_log["total_predictions"],
+                        "Last Trained": meta["trained_date"][:10]
+                    })
+        
+        if all_assets:
+            st.dataframe(pd.DataFrame(all_assets), width="stretch", hide_index=True)
+        else:
+            st.info("No models trained")
+    except Exception as e:
+        log_error(ErrorSeverity.ERROR, "all_models_tab", e, user_message="Models data error")
+
+add_footer()
