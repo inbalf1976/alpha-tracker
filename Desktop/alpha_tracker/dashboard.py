@@ -20,11 +20,18 @@ import logging
 from logging.handlers import RotatingFileHandler
 import traceback
 from enum import Enum
+from typing import Tuple, List
 
 # Suppress warnings
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 warnings.filterwarnings("ignore")
 tf.get_logger().setLevel('ERROR')
+
+# Suppress Streamlit thread warnings
+import streamlit.runtime.scriptrunner.script_run_context as script_run_context
+if hasattr(script_run_context, '_LOGGER'):
+    script_run_context._LOGGER.setLevel('ERROR')
 
 # ================================
 # LOGGING SETUP
@@ -195,7 +202,7 @@ except Exception as e:
 ASSET_CATEGORIES = {
     "Tech Stocks": {"Apple": "AAPL", "Tesla": "TSLA", "NVIDIA": "NVDA", "Microsoft": "MSFT", "Alphabet": "GOOGL"},
     "High Growth": {"Palantir": "PLTR", "MicroStrategy": "MSTR", "Coinbase": "COIN"},
-    "Commodities": {"Corn Futures": "ZC=F", "Gold Futures": "GC=F", "Coffee Futures": "KC=F", "Crude Oil": "CL=F", "Wheat": "ZW=F"},
+    "Commodities": {"Corn Futures": "ZC=F", "Gold Futures": "GC=F", "Crude Oil": "CL=F", "Wheat": "ZW=F"},
     "ETFs": {"S&P 500 ETF": "SPY", "WHEAT": "WEAT"}
 }
 
@@ -591,6 +598,118 @@ def high_confidence_checklist(ticker: str, forecast: list, current_price: float)
 
     passed = len(reasons) == 0
     return passed, reasons
+
+# ================================
+# ULTRA-CONFIDENCE SHIELD (STRICTER - FOR TRADING SIGNALS)
+# ================================
+def ultra_confidence_shield(ticker: str, forecast: List[float], current_price: float) -> Tuple[bool, List[str]]:
+    """
+    Returns (allow_prediction: bool, veto_reasons: list)
+    This is the nuclear option — ZERO tolerance for any weakness.
+    Used for high-stakes trading alerts (Telegram), not UI display.
+    """
+    veto = []
+    meta = load_metadata(ticker)
+    acc = load_accuracy_log(ticker)
+    
+    # Initialize variables to avoid scope issues
+    age = 999
+    vol_df = None
+    
+    # 1. Ironclad accuracy history
+    if acc.get("total_predictions", 0) < 25:
+        veto.append(f"Only {acc['total_predictions']} live preds (<25)")
+    if acc.get("avg_error", 0.99) > 0.038:  # ≤3.8% error last 30 days
+        veto.append(f"Error {acc['avg_error']:.2%} > 3.8%")
+    
+    # 2. Model must be battle-tested
+    if meta.get("retrain_count", 0) < 4:
+        veto.append(f"Only {meta.get('retrain_count', 0)} retrains (<4)")
+    
+    # 3. Model must be fresh
+    if meta.get("trained_date"):
+        try:
+            age = (datetime.now() - datetime.fromisoformat(meta["trained_date"])).days
+            if age > 9:
+                veto.append(f"Model {age}d old (>9)")
+        except:
+            pass
+    
+    # 4. No extreme volatility without fresh retrain
+    try:
+        vol_df = yf.download(ticker, period="45d", progress=False, threads=False)
+        vol_df = normalize_dataframe_columns(vol_df)
+        
+        if vol_df is not None and not vol_df.empty:
+            volatility = vol_df['Close'].pct_change().std()
+            if volatility > 0.032 and age > 4:  # >3.2% daily std-dev = dangerous
+                veto.append(f"High vol {volatility:.2%}/day")
+    except:
+        pass
+    
+    # 5. Forecast must be mathematically sane
+    if forecast and current_price and vol_df is not None and not vol_df.empty:
+        move = abs(forecast[0] - current_price) / current_price
+        if move > 0.09:  # >9% single-day move = fantasy
+            veto.append(f"Insane move {move:+.2%}")
+        
+        # Forecast must stay inside last 30-day Bollinger Bands (±2.5σ for flexibility)
+        try:
+            close_series = vol_df['Close']
+            ma = close_series.rolling(20).mean().iloc[-1]
+            std = close_series.rolling(20).std().iloc[-1]
+            upper = ma + 2.5 * std  # Relaxed from 2σ to 2.5σ
+            lower = ma - 2.5 * std
+            if not (lower <= forecast[0] <= upper):
+                veto.append("Outside Bollinger Bands (2.5σ)")
+        except:
+            pass
+    
+    # 6. Trend consistency — no violent reversal without volume proof
+    try:
+        hist = yf.download(ticker, period="12d", progress=False, threads=False)
+        hist = normalize_dataframe_columns(hist)
+        
+        if hist is not None and not hist.empty and len(hist) > 7:
+            hist_close = hist['Close']
+            trend = (hist_close.iloc[-1] - hist_close.iloc[-7]) / hist_close.iloc[-7]
+            pred_move = (forecast[0] - current_price) / current_price if forecast and current_price else 0
+            
+            if trend * pred_move < -0.65:  # strong reversal
+                try:
+                    ticker_obj = yf.Ticker(ticker)
+                    info = ticker_obj.info
+                    today_volume = info.get("volume", 0)
+                    avg_volume = info.get("averageVolume", 1) or info.get("averageDailyVolume10Day", 1)
+                    
+                    if today_volume < avg_volume * 1.8:
+                        veto.append("Reversal without volume confirmation")
+                except:
+                    pass
+    except:
+        pass
+    
+    # 7. Market regime match
+    if vol_df is not None and not vol_df.empty and meta.get("training_volatility", 0) > 0:
+        try:
+            current_volatility = vol_df['Close'].pct_change().std()
+            regime_change = abs(current_volatility - meta["training_volatility"]) / meta["training_volatility"]
+            if regime_change > 0.45:
+                veto.append(f"Regime shift {regime_change:+.1%}")
+        except:
+            pass
+    
+    # 8. No prediction on low-liquidity days
+    try:
+        info = yf.Ticker(ticker).info
+        trading_volume = info.get("volume", 0)
+        avg_volume = info.get("averageVolume", 1) or info.get("averageDailyVolume10Day", 1)
+        if trading_volume < avg_volume * 0.55:
+            veto.append("Low volume day")
+    except:
+        pass
+    
+    return len(veto) == 0, veto
 
 # ================================
 # MODEL BUILDING
