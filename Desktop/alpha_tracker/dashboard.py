@@ -28,10 +28,14 @@ os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 warnings.filterwarnings("ignore")
 tf.get_logger().setLevel('ERROR')
 
-# Suppress Streamlit thread warnings
-import streamlit.runtime.scriptrunner.script_run_context as script_run_context
-if hasattr(script_run_context, '_LOGGER'):
-    script_run_context._LOGGER.setLevel('ERROR')
+# Suppress Streamlit thread warnings (safe import)
+try:
+    from streamlit.runtime.scriptrunner import script_run_context
+    if hasattr(script_run_context, '_LOGGER'):
+        script_run_context._LOGGER.setLevel('ERROR')
+except (ImportError, AttributeError):
+    # Streamlit version doesn't support this - that's okay, warnings are harmless
+    pass
 
 # ================================
 # LOGGING SETUP
@@ -1019,7 +1023,7 @@ def show_5day_forecast(ticker, asset_name):
         title_suffix = " (High Confidence)" if passed else " (Low Confidence)"
         fig.update_layout(title=f"{asset_name.upper()} — 5-Day Forecast{title_suffix}", xaxis_title="Date", yaxis_title="Price (USD)", 
                           template="plotly_dark", height=500)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=False, key=f"forecast_{ticker}_{datetime.now().timestamp()}")
 
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -1267,6 +1271,32 @@ def monitor_6percent_pre_move():
                                 should_alert = True
                     
                     if should_alert:
+                        # Get current price for ultra-confidence check
+                        current_price = get_latest_price(ticker)
+                        if not current_price:
+                            continue
+                        
+                        # Run ULTRA-CONFIDENCE SHIELD before sending Telegram alert
+                        # (This ensures only bulletproof predictions trigger trades)
+                        try:
+                            # Get forecast for this ticker
+                            forecast, _, _ = train_self_learning_model(ticker, days=1)
+                            if forecast is None:
+                                continue
+                            
+                            # Check ultra-confidence
+                            ultra_passed, ultra_reasons = ultra_confidence_shield(ticker, forecast, current_price)
+                            
+                            if not ultra_passed:
+                                logger.info(f"[SHIELD BLOCKED] {name} - Reasons: {', '.join(ultra_reasons)}")
+                                continue  # Don't send alert if ultra-confidence fails
+                            
+                        except Exception as e:
+                            log_error(ErrorSeverity.WARNING, "monitor_ultra_check", e, ticker=ticker, 
+                                      user_message=f"Ultra-confidence check failed: {name}", show_to_user=False)
+                            continue
+                        
+                        # Passed ultra-confidence - send alert
                         factors_text = "\n".join([f"• {f}" for f in alert['factors']])
                         
                         text = (
@@ -1276,6 +1306,7 @@ def monitor_6percent_pre_move():
                             f"<b>Confidence:</b> {alert['confidence']}%\n"
                             f"<b>Score:</b> {alert['score']}/100\n\n"
                             f"<b>Indicators:</b>\n{factors_text}\n\n"
+                            f"✅ <b>ULTRA-CONFIDENCE: PASSED</b>\n"
                             f"⏰ <i>Predicted 5-15 minutes before major move</i>"
                         )
                         
@@ -1287,7 +1318,7 @@ def monitor_6percent_pre_move():
                                         "timestamp": datetime.now().isoformat(),
                                         "confidence": alert['confidence']
                                     }
-                            logger.info(f"[PREDICTIVE] Alert sent for {name}")
+                            logger.info(f"[PREDICTIVE] Ultra-confidence alert sent for {name}")
                             time.sleep(2)
                     
                     time.sleep(1)
@@ -1367,22 +1398,22 @@ def show_error_dashboard():
 def add_header():
     st.markdown("""
     <div style='text-align:center;padding:15px;background:#1a1a1a;color:#00C853;margin-bottom:20px;border-radius:8px;'>
-    	<h2 style='margin:0;'>🧠 AI - ALPHA STOCK TRACKER v4.0</h2>
-    	<p style='margin:5px 0;'>Self-Learning • Persistent 24/7 • Enhanced Logging</p>
+    	<h2 style='margin:0;'>🧠 AI - ALPHA STOCK TRACKER v4.1</h2>
+    	<p style='margin:5px 0;'>Self-Learning • Ultra-Confidence Shield • Enhanced Quality Control</p>
     </div>
     """, unsafe_allow_html=True)
 
 def add_footer():
     st.markdown("""
     <div style='text-align:center;padding:20px;background:#1a1a1a;color:#666;margin-top:40px;border-radius:8px;'>
-    	<p style='margin:0;'>© 2025 AI - Alpha Stock Tracker | Enhanced Error Handling</p>
+    	<p style='margin:0;'>© 2025 AI - Alpha Stock Tracker v4.1 | Two-Layer Confidence System</p>
     </div>
     """, unsafe_allow_html=True)
 
 # ================================
 # MAIN APP
 # ================================
-st.set_page_config(page_title="AI - Alpha Stock Tracker v4.0", layout="wide")
+st.set_page_config(page_title="AI - Alpha Stock Tracker v4.1", layout="wide")
 
 # Initialize session state BEFORE threads
 if 'alert_history' not in st.session_state:
@@ -1591,7 +1622,7 @@ with tab1:
                 {"Metric": "Retrains", "Value": str(metadata["retrain_count"])},
                 {"Metric": "Lookback", "Value": str(LEARNING_CONFIG["lookback_window"])}
             ]
-            st.dataframe(pd.DataFrame(perf_data).set_index('Metric'), use_container_width=True)
+            st.dataframe(pd.DataFrame(perf_data).set_index('Metric'), width='stretch')
         except Exception as e:
             log_error(ErrorSeverity.WARNING, "performance_display", e, user_message="Performance data error", show_to_user=False)
 
@@ -1621,7 +1652,7 @@ with tab3:
                     })
         
         if all_assets:
-            st.dataframe(pd.DataFrame(all_assets), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(all_assets), width='stretch', hide_index=True)
         else:
             st.info("No models trained")
     except Exception as e:
