@@ -1486,6 +1486,29 @@ with st.sidebar:
                 log_error(ErrorSeverity.ERROR, "force_retrain", e, ticker=ticker, user_message="Retrain failed")
 
     st.markdown("---")
+    if st.button("🚀 Bootstrap All Models", use_container_width=True):
+        with st.spinner("Training all models... This will take 5-10 minutes"):
+            try:
+                all_tickers = [t for cat in ASSET_CATEGORIES.values() for _, t in cat.items()]
+                progress_bar = st.progress(0)
+                total = len(all_tickers)
+                
+                for idx, train_ticker in enumerate(all_tickers):
+                    st.write(f"Training {train_ticker}... ({idx+1}/{total})")
+                    try:
+                        train_self_learning_model(train_ticker, days=5, force_retrain=True)
+                    except Exception as e:
+                        log_error(ErrorSeverity.ERROR, "bootstrap_training", e, ticker=train_ticker, 
+                                  user_message=f"Failed to train {train_ticker}", show_to_user=False)
+                    progress_bar.progress((idx + 1) / total)
+                
+                st.success("✅ All models trained!")
+                time.sleep(2)
+                st.rerun()
+            except Exception as e:
+                log_error(ErrorSeverity.ERROR, "bootstrap_all", e, user_message="Bootstrap failed")
+
+    st.markdown("---")
     st.subheader("🤖 Learning Daemon")
     
     try:
@@ -1597,7 +1620,7 @@ with col2:
 st.markdown("---")
 
 # Tabs
-tab1, tab2, tab3 = st.tabs(["📈 Learning Activity", "🔍 Error Monitoring", "📊 Performance"])
+tab1, tab2, tab3, tab4 = st.tabs(["📈 Learning Activity", "🔍 Error Monitoring", "📊 Performance", "🔧 System Diagnostics"])
 
 with tab1:
     st.subheader("🧠 Self-Learning Activity")
@@ -1657,5 +1680,82 @@ with tab3:
             st.info("No models trained")
     except Exception as e:
         log_error(ErrorSeverity.ERROR, "all_models_tab", e, user_message="Models data error")
+
+with tab4:
+    st.subheader("🔧 System Diagnostics")
+    
+    st.write("**Model Files Status:**")
+    
+    try:
+        diagnostic_data = []
+        all_tickers = [t for cat in ASSET_CATEGORIES.values() for _, t in cat.items()]
+        
+        for ticker in all_tickers:
+            model_exists = get_model_path(ticker).exists()
+            scaler_exists = get_scaler_path(ticker).exists()
+            meta = load_metadata(ticker)
+            acc = load_accuracy_log(ticker)
+            
+            # Get asset name
+            asset_name = ticker
+            for cat_name, assets in ASSET_CATEGORIES.items():
+                for name, tick in assets.items():
+                    if tick == ticker:
+                        asset_name = name
+                        break
+            
+            status_icon = "✅" if model_exists else "❌"
+            trained_date = meta.get('trained_date', 'Never')
+            if trained_date != 'Never':
+                trained_date = trained_date[:10]
+            
+            diagnostic_data.append({
+                "Status": status_icon,
+                "Asset": asset_name,
+                "Ticker": ticker,
+                "Model": "Yes" if model_exists else "No",
+                "Scaler": "Yes" if scaler_exists else "No",
+                "Trained": trained_date,
+                "Predictions": acc.get('total_predictions', 0),
+                "Retrains": meta.get('retrain_count', 0),
+                "Avg Error": f"{acc.get('avg_error', 0):.1%}" if acc.get('total_predictions', 0) > 0 else "N/A"
+            })
+        
+        df = pd.DataFrame(diagnostic_data)
+        st.dataframe(df, width='stretch', hide_index=True)
+        
+        # Summary stats
+        st.markdown("---")
+        col1, col2, col3, col4 = st.columns(4)
+        
+        trained_count = sum(1 for d in diagnostic_data if d['Model'] == 'Yes')
+        total_count = len(diagnostic_data)
+        total_predictions = sum(d['Predictions'] for d in diagnostic_data)
+        avg_retrains = sum(d['Retrains'] for d in diagnostic_data) / total_count if total_count > 0 else 0
+        
+        with col1:
+            st.metric("Models Trained", f"{trained_count}/{total_count}")
+        with col2:
+            st.metric("Total Predictions", total_predictions)
+        with col3:
+            st.metric("Avg Retrains", f"{avg_retrains:.1f}")
+        with col4:
+            ready_count = sum(1 for d in diagnostic_data if d['Predictions'] >= 12 and d['Retrains'] >= 2)
+            st.metric("High-Confidence Ready", f"{ready_count}/{total_count}")
+        
+        # System health indicator
+        st.markdown("---")
+        if trained_count == 0:
+            st.error("⚠️ **No models trained yet!** Click '🚀 Bootstrap All Models' in the sidebar to get started.")
+        elif trained_count < total_count:
+            st.warning(f"⚠️ **{total_count - trained_count} models need training.** Use the bootstrap button or wait for the daemon.")
+        elif ready_count == 0:
+            st.info("📊 **Models trained but need validation data.** Predictions will accumulate daily. Check back in 12+ days for high-confidence recommendations.")
+        else:
+            st.success(f"✅ **System ready!** {ready_count} models meet high-confidence criteria.")
+        
+    except Exception as e:
+        log_error(ErrorSeverity.ERROR, "diagnostics_tab", e, user_message="Diagnostics error")
+        st.error("Failed to load diagnostics")
 
 add_footer()
