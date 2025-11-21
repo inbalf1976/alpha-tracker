@@ -1065,6 +1065,29 @@ def continuous_learning_daemon():
                     updated, accuracy_log = validate_predictions(ticker)
                     if updated:
                         metadata = load_metadata(ticker)
+                        
+                        # Check for broken model (negative or very poor accuracy)
+                        accuracy_pct = (1 - accuracy_log.get('avg_error', 0)) * 100
+                        if accuracy_log.get('total_predictions', 0) >= 3 and accuracy_pct < 50:
+                            with session_state_lock:
+                                if hasattr(st, 'session_state'):
+                                    st.session_state.setdefault('learning_log', []).append(
+                                        f"🔴 Auto-fixing broken model {ticker} (accuracy: {accuracy_pct:.1f}%)"
+                                    )
+                            
+                            # Delete corrupted files
+                            model_path = get_model_path(ticker)
+                            scaler_path = get_scaler_path(ticker)
+                            if model_path.exists():
+                                model_path.unlink()
+                            if scaler_path.exists():
+                                scaler_path.unlink()
+                            
+                            logger.info(f"Auto-fixing broken model: {ticker} (accuracy: {accuracy_pct:.1f}%)")
+                            train_self_learning_model(ticker, days=1, force_retrain=True)
+                            continue
+                        
+                        # Normal retrain logic
                         needs_retrain, reasons = should_retrain(ticker, accuracy_log, metadata)
                         if needs_retrain:
                             with session_state_lock:
@@ -1659,23 +1682,116 @@ with tab3:
     st.subheader("📊 All Models")
     try:
         all_assets = []
+        broken_models = []  # Track models that need fixing
+        
         for cat_name, assets in ASSET_CATEGORIES.items():
             for asset_name, asset_ticker in assets.items():
                 meta = load_metadata(asset_ticker)
                 acc_log = load_accuracy_log(asset_ticker)
+                
                 if meta["trained_date"]:
+                    # Get current price
+                    try:
+                        current_price = get_latest_price(asset_ticker)
+                    except:
+                        current_price = None
+                    
+                    # Get tomorrow's prediction from file
+                    tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+                    pred_path = get_prediction_path(asset_ticker, tomorrow)
+                    predicted_price = None
+                    price_change = None
+                    
+                    if pred_path.exists():
+                        try:
+                            with open(pred_path, 'r') as f:
+                                pred_data = json.load(f)
+                            predicted_price = pred_data.get("predicted_price")
+                            if predicted_price and current_price:
+                                price_change = ((predicted_price - current_price) / current_price) * 100
+                        except:
+                            pass
+                    
+                    # Calculate accuracy
+                    accuracy_value = acc_log.get('avg_error', 0)
+                    accuracy_pct = (1 - accuracy_value) * 100 if acc_log['total_predictions'] > 0 else None
+                    
+                    # Determine model health
+                    health = "🔴"  # Red = broken
+                    if accuracy_pct is None:
+                        health = "⚪"  # White = no data yet
+                    elif accuracy_pct < 0:
+                        health = "🔴"  # Red = negative accuracy (broken)
+                        broken_models.append(asset_ticker)
+                    elif accuracy_pct < 50:
+                        health = "🔴"  # Red = very poor
+                        broken_models.append(asset_ticker)
+                    elif accuracy_pct < 70:
+                        health = "🟡"  # Yellow = needs improvement
+                    elif accuracy_pct < 85:
+                        health = "🟢"  # Green = good
+                    else:
+                        health = "💚"  # Dark green = excellent
+                    
+                    # Format prediction
+                    if predicted_price and price_change is not None:
+                        pred_str = f"${predicted_price:.2f} ({price_change:+.1f}%)"
+                    elif predicted_price:
+                        pred_str = f"${predicted_price:.2f}"
+                    else:
+                        pred_str = "N/A"
+                    
                     all_assets.append({
+                        "Health": health,
                         "Asset": asset_name,
                         "Ticker": asset_ticker,
+                        "Tomorrow": pred_str,
                         "Version": meta["version"],
                         "Retrains": meta["retrain_count"],
-                        "Accuracy": f"{(1 - acc_log['avg_error'])*100:.1f}%" if acc_log['total_predictions'] > 0 else "N/A",
+                        "Accuracy": f"{accuracy_pct:.1f}%" if accuracy_pct is not None else "N/A",
                         "Predictions": acc_log["total_predictions"],
                         "Last Trained": meta["trained_date"][:10]
                     })
         
         if all_assets:
             st.dataframe(pd.DataFrame(all_assets), width='stretch', hide_index=True)
+            
+            # Legend
+            st.markdown("""
+            **Health Legend:** 💚 Excellent (85%+) | 🟢 Good (70-85%) | 🟡 Fair (50-70%) | 🔴 Poor (<50%) | ⚪ No data
+            """)
+            
+            # Auto-fix broken models
+            if broken_models:
+                st.warning(f"⚠️ **{len(broken_models)} broken models detected** (negative or very poor accuracy)")
+                
+                if st.button("🔧 Auto-Fix All Broken Models", use_container_width=True):
+                    with st.spinner(f"Fixing {len(broken_models)} broken models..."):
+                        progress_bar = st.progress(0)
+                        for idx, broken_ticker in enumerate(broken_models):
+                            st.write(f"Fixing {broken_ticker}...")
+                            try:
+                                # Delete old model and scaler files
+                                model_path = get_model_path(broken_ticker)
+                                scaler_path = get_scaler_path(broken_ticker)
+                                if model_path.exists():
+                                    model_path.unlink()
+                                if scaler_path.exists():
+                                    scaler_path.unlink()
+                                
+                                # Force full retrain
+                                train_self_learning_model(broken_ticker, days=5, force_retrain=True)
+                                st.success(f"✅ Fixed {broken_ticker}")
+                            except Exception as e:
+                                log_error(ErrorSeverity.ERROR, "auto_fix_broken", e, ticker=broken_ticker,
+                                          user_message=f"Failed to fix {broken_ticker}", show_to_user=False)
+                                st.error(f"❌ Failed to fix {broken_ticker}")
+                            
+                            progress_bar.progress((idx + 1) / len(broken_models))
+                        
+                        st.success("✅ All broken models fixed!")
+                        time.sleep(2)
+                        st.rerun()
         else:
             st.info("No models trained")
     except Exception as e:
