@@ -583,7 +583,7 @@ def high_confidence_checklist(ticker: str, forecast: list, current_price: float)
         pass
 
     # 5. Unrealistic forecast
-    if forecast and current_price:
+    if forecast is not None and len(forecast) > 0 and current_price:
         implied_move = abs(forecast[0] - current_price) / current_price
         if implied_move > 0.12:  # >12% in one day
             reasons.append(f"Extreme move predicted {implied_move:+.1%}")
@@ -594,7 +594,7 @@ def high_confidence_checklist(ticker: str, forecast: list, current_price: float)
         hist = normalize_dataframe_columns(hist)
         if hist is not None and not hist.empty and len(hist) > 6:
             trend_5d = (hist['Close'].iloc[-1] - hist['Close'].iloc[-6]) / hist['Close'].iloc[-6]
-            pred_move = (forecast[0] - current_price) / current_price if forecast and current_price else 0
+            pred_move = (forecast[0] - current_price) / current_price if forecast is not None and len(forecast) > 0 and current_price else 0
             if trend_5d * pred_move < -0.5:  # strong reversal
                 reasons.append("Predicting sharp reversal")
     except:
@@ -652,7 +652,7 @@ def ultra_confidence_shield(ticker: str, forecast: List[float], current_price: f
         pass
     
     # 5. Forecast must be mathematically sane
-    if forecast and current_price and vol_df is not None and not vol_df.empty:
+    if forecast is not None and len(forecast) > 0 and current_price and vol_df is not None and not vol_df.empty:
         move = abs(forecast[0] - current_price) / current_price
         if move > 0.09:  # >9% single-day move = fantasy
             veto.append(f"Insane move {move:+.2%}")
@@ -677,7 +677,7 @@ def ultra_confidence_shield(ticker: str, forecast: List[float], current_price: f
         if hist is not None and not hist.empty and len(hist) > 7:
             hist_close = hist['Close']
             trend = (hist_close.iloc[-1] - hist_close.iloc[-7]) / hist_close.iloc[-7]
-            pred_move = (forecast[0] - current_price) / current_price if forecast and current_price else 0
+            pred_move = (forecast[0] - current_price) / current_price if forecast is not None and len(forecast) > 0 and current_price else 0
             
             if trend * pred_move < -0.65:  # strong reversal
                 try:
