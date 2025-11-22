@@ -247,6 +247,65 @@ model_cache_lock = threading.Lock()
 accuracy_lock = threading.Lock()
 config_lock = threading.Lock()
 session_state_lock = threading.Lock()
+heartbeat_lock = threading.Lock()
+
+# ================================
+# THREAD HEALTH MONITORING
+# ================================
+
+# Thread heartbeat tracking
+THREAD_HEARTBEATS = {
+    "learning_daemon": None,
+    "monitoring": None,
+    "watchdog": None
+}
+
+THREAD_START_TIMES = {
+    "learning_daemon": None,
+    "monitoring": None,
+    "watchdog": None
+}
+
+def update_heartbeat(thread_name):
+    """Update heartbeat timestamp for a thread"""
+    with heartbeat_lock:
+        THREAD_HEARTBEATS[thread_name] = datetime.now()
+
+def get_thread_status(thread_name):
+    """Get status of a thread"""
+    with heartbeat_lock:
+        last_heartbeat = THREAD_HEARTBEATS.get(thread_name)
+        start_time = THREAD_START_TIMES.get(thread_name)
+    
+    if last_heartbeat is None:
+        return {"status": "STOPPED", "last_heartbeat": None, "uptime": None}
+    
+    seconds_since_heartbeat = (datetime.now() - last_heartbeat).total_seconds()
+    
+    # If no heartbeat in 5 minutes, consider dead
+    if seconds_since_heartbeat > 300:
+        return {"status": "DEAD", "last_heartbeat": last_heartbeat, "uptime": None}
+    
+    # If no heartbeat in 2 minutes, warning
+    if seconds_since_heartbeat > 120:
+        status = "WARNING"
+    else:
+        status = "HEALTHY"
+    
+    # Calculate uptime
+    uptime = None
+    if start_time:
+        uptime_seconds = (datetime.now() - start_time).total_seconds()
+        hours = int(uptime_seconds // 3600)
+        minutes = int((uptime_seconds % 3600) // 60)
+        uptime = f"{hours}h {minutes}m"
+    
+    return {
+        "status": status,
+        "last_heartbeat": last_heartbeat,
+        "seconds_since": int(seconds_since_heartbeat),
+        "uptime": uptime
+    }
 
 # ================================
 # HELPER: NORMALIZE DATAFRAME COLUMNS
@@ -331,59 +390,128 @@ def get_prediction_path(ticker, date):
     return PREDICTIONS_DIR / f"{get_safe_ticker_name(ticker)}_{date}.json"
 
 # ================================
-# PRICE FETCHING
+# PRICE FETCHING WITH VALIDATION
 # ================================
+
+# Expected price ranges for validation (approximate, will auto-adjust)
+PRICE_RANGES = {
+    "AAPL": (150, 500),      # Apple
+    "TSLA": (150, 600),      # Tesla
+    "NVDA": (100, 400),      # NVIDIA - updated for current levels
+    "MSFT": (300, 600),      # Microsoft - updated
+    "GOOGL": (100, 400),     # Alphabet
+    "PLTR": (5, 200),        # Palantir - UPDATED to allow $156
+    "MSTR": (100, 900),      # MicroStrategy - updated for volatility
+    "COIN": (50, 500),       # Coinbase
+    "ZC=F": (300, 700),      # Corn futures
+    "GC=F": (1500, 5000),    # Gold futures
+    "CL=F": (30, 150),       # Crude oil
+    "ZW=F": (400, 800),      # Wheat futures
+    "SPY": (400, 900),       # S&P 500 ETF - updated
+    "WEAT": (3, 15)          # Wheat ETF
+}
+
+def validate_price(ticker, price):
+    """Validate if price is within reasonable range for this ticker"""
+    if price is None or price <= 0:
+        return False
+    
+    if ticker in PRICE_RANGES:
+        min_price, max_price = PRICE_RANGES[ticker]
+        if min_price <= price <= max_price:
+            return True
+        else:
+            logger.warning(f"Price validation failed for {ticker}: ${price:.2f} outside range ${min_price}-${max_price}")
+            return False
+    
+    # If no range defined, accept any positive price
+    return True
+
 @st.cache_data(ttl=60, show_spinner=False)
 def get_latest_price(ticker):
     logger.debug(f"Fetching price for {ticker}")
     methods_tried = []
     
+    # Add delay to avoid rate limiting and cache confusion
+    time.sleep(0.3)
+    
     try:
-        # Method 1: 1-minute interval
-        try:
-            data = yf.download(ticker, period="1d", interval="1m", progress=False)
-            data = normalize_dataframe_columns(data)
-            if data is not None and not data.empty and len(data) > 0:
-                price = float(data['Close'].iloc[-1])
-                logger.info(f"Price: {ticker} ${price:.2f}")
-                return round(price, 4) if ticker.endswith(("=F", "=X")) else round(price, 2)
-            methods_tried.append("1m-no-data")
-        except Exception as e:
-            methods_tried.append(f"1m-{type(e).__name__}")
+        # Method 1: 1-minute interval with validation
+        for attempt in range(2):
+            try:
+                data = yf.download(ticker, period="1d", interval="1m", progress=False, threads=False)
+                data = normalize_dataframe_columns(data)
+                if data is not None and not data.empty and len(data) > 0:
+                    price = float(data['Close'].iloc[-1])
+                    
+                    # Validate price
+                    if validate_price(ticker, price):
+                        logger.info(f"Price: {ticker} ${price:.2f}")
+                        return round(price, 4) if ticker.endswith(("=F", "=X")) else round(price, 2)
+                    else:
+                        methods_tried.append(f"1m-invalid-price-{price:.2f}")
+                        if attempt == 0:
+                            time.sleep(1)  # Wait and retry
+                            continue
+                methods_tried.append("1m-no-data")
+            except Exception as e:
+                methods_tried.append(f"1m-{type(e).__name__}")
+                if attempt == 0:
+                    time.sleep(1)
         
-        # Method 2: 5-minute
+        # Method 2: 5-minute with validation
         try:
-            data = yf.download(ticker, period="1d", interval="5m", progress=False)
+            time.sleep(0.5)
+            data = yf.download(ticker, period="1d", interval="5m", progress=False, threads=False)
             data = normalize_dataframe_columns(data)
             if data is not None and not data.empty:
                 price = float(data['Close'].iloc[-1])
-                return round(price, 4) if ticker.endswith(("=F", "=X")) else round(price, 2)
-            methods_tried.append("5m-no-data")
+                if validate_price(ticker, price):
+                    logger.info(f"Price: {ticker} ${price:.2f} (5m)")
+                    return round(price, 4) if ticker.endswith(("=F", "=X")) else round(price, 2)
+                methods_tried.append(f"5m-invalid-price-{price:.2f}")
+            else:
+                methods_tried.append("5m-no-data")
         except Exception as e:
             methods_tried.append(f"5m-{type(e).__name__}")
         
-        # Method 3: Daily
+        # Method 3: Daily with validation
         try:
-            data = yf.download(ticker, period="5d", interval="1d", progress=False)
+            time.sleep(0.5)
+            data = yf.download(ticker, period="5d", interval="1d", progress=False, threads=False)
             data = normalize_dataframe_columns(data)
             if data is not None and not data.empty:
                 price = float(data['Close'].iloc[-1])
-                return round(price, 4) if ticker.endswith(("=F", "=X")) else round(price, 2)
-            methods_tried.append("1d-no-data")
+                if validate_price(ticker, price):
+                    logger.info(f"Price: {ticker} ${price:.2f} (1d)")
+                    return round(price, 4) if ticker.endswith(("=F", "=X")) else round(price, 2)
+                methods_tried.append(f"1d-invalid-price-{price:.2f}")
+            else:
+                methods_tried.append("1d-no-data")
         except Exception as e:
             methods_tried.append(f"1d-{type(e).__name__}")
         
-        # Method 4: Ticker info
+        # Method 4: Ticker info with validation
         try:
+            time.sleep(0.5)
             tick = yf.Ticker(ticker)
             info = tick.info
+            price = None
+            
             if 'regularMarketPrice' in info and info['regularMarketPrice']:
                 price = float(info['regularMarketPrice'])
-                return round(price, 4) if ticker.endswith(("=F", "=X")) else round(price, 2)
             elif 'previousClose' in info and info['previousClose']:
                 price = float(info['previousClose'])
+            elif 'currentPrice' in info and info['currentPrice']:
+                price = float(info['currentPrice'])
+            
+            if price and validate_price(ticker, price):
+                logger.info(f"Price: {ticker} ${price:.2f} (info)")
                 return round(price, 4) if ticker.endswith(("=F", "=X")) else round(price, 2)
-            methods_tried.append("info-no-price")
+            elif price:
+                methods_tried.append(f"info-invalid-price-{price:.2f}")
+            else:
+                methods_tried.append("info-no-price")
         except Exception as e:
             methods_tried.append(f"info-{type(e).__name__}")
         
@@ -583,7 +711,7 @@ def high_confidence_checklist(ticker: str, forecast: list, current_price: float)
         pass
 
     # 5. Unrealistic forecast
-    if forecast and current_price:
+    if forecast is not None and len(forecast) > 0 and current_price:
         implied_move = abs(forecast[0] - current_price) / current_price
         if implied_move > 0.12:  # >12% in one day
             reasons.append(f"Extreme move predicted {implied_move:+.1%}")
@@ -594,7 +722,7 @@ def high_confidence_checklist(ticker: str, forecast: list, current_price: float)
         hist = normalize_dataframe_columns(hist)
         if hist is not None and not hist.empty and len(hist) > 6:
             trend_5d = (hist['Close'].iloc[-1] - hist['Close'].iloc[-6]) / hist['Close'].iloc[-6]
-            pred_move = (forecast[0] - current_price) / current_price if forecast and current_price else 0
+            pred_move = (forecast[0] - current_price) / current_price if forecast is not None and len(forecast) > 0 and current_price else 0
             if trend_5d * pred_move < -0.5:  # strong reversal
                 reasons.append("Predicting sharp reversal")
     except:
@@ -652,7 +780,7 @@ def ultra_confidence_shield(ticker: str, forecast: List[float], current_price: f
         pass
     
     # 5. Forecast must be mathematically sane
-    if forecast and current_price and vol_df is not None and not vol_df.empty:
+    if forecast is not None and len(forecast) > 0 and current_price and vol_df is not None and not vol_df.empty:
         move = abs(forecast[0] - current_price) / current_price
         if move > 0.09:  # >9% single-day move = fantasy
             veto.append(f"Insane move {move:+.2%}")
@@ -677,7 +805,7 @@ def ultra_confidence_shield(ticker: str, forecast: List[float], current_price: f
         if hist is not None and not hist.empty and len(hist) > 7:
             hist_close = hist['Close']
             trend = (hist_close.iloc[-1] - hist_close.iloc[-7]) / hist_close.iloc[-7]
-            pred_move = (forecast[0] - current_price) / current_price if forecast and current_price else 0
+            pred_move = (forecast[0] - current_price) / current_price if forecast is not None and len(forecast) > 0 and current_price else 0
             
             if trend * pred_move < -0.65:  # strong reversal
                 try:
@@ -1048,23 +1176,61 @@ def show_5day_forecast(ticker, asset_name):
 # ================================
 def continuous_learning_daemon():
     logger.info("Learning daemon started")
+    
+    # Record start time
+    with heartbeat_lock:
+        THREAD_START_TIMES["learning_daemon"] = datetime.now()
+    
     while True:
         try:
+            # Update heartbeat
+            update_heartbeat("learning_daemon")
+            
             daemon_config = load_daemon_config()
             if not daemon_config.get("enabled", False):
                 logger.info("Daemon stopped")
+                with heartbeat_lock:
+                    THREAD_HEARTBEATS["learning_daemon"] = None
+                    THREAD_START_TIMES["learning_daemon"] = None
                 break
             
             all_tickers = [ticker for cat in ASSET_CATEGORIES.values() for _, ticker in cat.items()]
             
             for ticker in all_tickers:
                 try:
+                    # Check if daemon should still run
                     if not load_daemon_config().get("enabled", False):
                         break
+                    
+                    # Update heartbeat every iteration
+                    update_heartbeat("learning_daemon")
                     
                     updated, accuracy_log = validate_predictions(ticker)
                     if updated:
                         metadata = load_metadata(ticker)
+                        
+                        # Check for broken model (negative or very poor accuracy)
+                        accuracy_pct = (1 - accuracy_log.get('avg_error', 0)) * 100
+                        if accuracy_log.get('total_predictions', 0) >= 3 and accuracy_pct < 50:
+                            with session_state_lock:
+                                if hasattr(st, 'session_state'):
+                                    st.session_state.setdefault('learning_log', []).append(
+                                        f"🔴 Auto-fixing broken model {ticker} (accuracy: {accuracy_pct:.1f}%)"
+                                    )
+                            
+                            # Delete corrupted files
+                            model_path = get_model_path(ticker)
+                            scaler_path = get_scaler_path(ticker)
+                            if model_path.exists():
+                                model_path.unlink()
+                            if scaler_path.exists():
+                                scaler_path.unlink()
+                            
+                            logger.info(f"Auto-fixing broken model: {ticker} (accuracy: {accuracy_pct:.1f}%)")
+                            train_self_learning_model(ticker, days=1, force_retrain=True)
+                            continue
+                        
+                        # Normal retrain logic
                         needs_retrain, reasons = should_retrain(ticker, accuracy_log, metadata)
                         if needs_retrain:
                             with session_state_lock:
@@ -1075,9 +1241,13 @@ def continuous_learning_daemon():
                 except Exception as e:
                     log_error(ErrorSeverity.ERROR, "continuous_learning_daemon", e, ticker=ticker, user_message=f"Daemon error: {ticker}", show_to_user=False)
             
+            # Update heartbeat before sleep
+            update_heartbeat("learning_daemon")
             time.sleep(3600)
+            
         except Exception as e:
             log_error(ErrorSeverity.CRITICAL, "continuous_learning_daemon", e, user_message="Critical daemon error", show_to_user=False)
+            update_heartbeat("learning_daemon")  # Update even on error
             time.sleep(600)
 
 # ================================
@@ -1235,11 +1405,21 @@ def monitor_6percent_pre_move():
     logger.info("[PREDICTIVE] 6%+ monitoring started")
     all_assets = {name: ticker for cat in ASSET_CATEGORIES.values() for name, ticker in cat.items()}
     
+    # Record start time
+    with heartbeat_lock:
+        THREAD_START_TIMES["monitoring"] = datetime.now()
+    
     while True:
         try:
+            # Update heartbeat
+            update_heartbeat("monitoring")
+            
             monitoring_config = load_monitoring_config()
             if not monitoring_config.get("enabled", False):
                 logger.info("Monitoring stopped")
+                with heartbeat_lock:
+                    THREAD_HEARTBEATS["monitoring"] = None
+                    THREAD_START_TIMES["monitoring"] = None
                 break
             
             for name, ticker in all_assets.items():
@@ -1326,13 +1506,102 @@ def monitor_6percent_pre_move():
                     log_error(ErrorSeverity.ERROR, "monitor_6percent_pre_move", e, ticker=ticker, 
                               user_message=f"Monitor error: {name}", show_to_user=False)
             
+            # Update heartbeat before sleep
+            update_heartbeat("monitoring")
             # Check every 30 seconds (more frequent for early detection)
             time.sleep(30)
             
         except Exception as e:
             log_error(ErrorSeverity.CRITICAL, "monitor_6percent_pre_move", e, 
                       user_message="Critical monitor error", show_to_user=False)
+            update_heartbeat("monitoring")  # Update even on error
             time.sleep(300)  # 5 minutes on critical error
+
+# ================================
+# WATCHDOG THREAD
+# ================================
+def thread_watchdog():
+    """Monitors thread health and auto-restarts dead threads"""
+    logger.info("Watchdog started")
+    
+    # Record start time
+    with heartbeat_lock:
+        THREAD_START_TIMES["watchdog"] = datetime.now()
+    
+    restart_count = {"learning_daemon": 0, "monitoring": 0}
+    
+    while True:
+        try:
+            # Update own heartbeat
+            update_heartbeat("watchdog")
+            
+            # Check learning daemon
+            daemon_config = load_daemon_config()
+            if daemon_config.get("enabled", False):
+                daemon_status = get_thread_status("learning_daemon")
+                
+                if daemon_status["status"] == "DEAD":
+                    restart_count["learning_daemon"] += 1
+                    logger.error(f"Learning daemon DEAD! Auto-restarting (attempt #{restart_count['learning_daemon']})")
+                    
+                    # Send Telegram alert
+                    alert_text = (
+                        f"🚨 <b>THREAD RESTART ALERT</b>\n\n"
+                        f"<b>Thread:</b> Learning Daemon\n"
+                        f"<b>Status:</b> DEAD (no heartbeat for 5+ minutes)\n"
+                        f"<b>Action:</b> Auto-restarting now...\n"
+                        f"<b>Restart Count:</b> {restart_count['learning_daemon']}\n\n"
+                        f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                    )
+                    send_telegram_alert(alert_text)
+                    
+                    # Restart thread
+                    threading.Thread(target=continuous_learning_daemon, daemon=True).start()
+                    logger.info("Learning daemon restarted by watchdog")
+                    
+                    with session_state_lock:
+                        if hasattr(st, 'session_state'):
+                            st.session_state.setdefault('learning_log', []).append(
+                                f"🔴 Learning Daemon DEAD - Auto-restarted by watchdog (attempt #{restart_count['learning_daemon']})"
+                            )
+            
+            # Check monitoring thread
+            monitoring_config = load_monitoring_config()
+            if monitoring_config.get("enabled", False):
+                monitoring_status = get_thread_status("monitoring")
+                
+                if monitoring_status["status"] == "DEAD":
+                    restart_count["monitoring"] += 1
+                    logger.error(f"Monitoring thread DEAD! Auto-restarting (attempt #{restart_count['monitoring']})")
+                    
+                    # Send Telegram alert
+                    alert_text = (
+                        f"🚨 <b>THREAD RESTART ALERT</b>\n\n"
+                        f"<b>Thread:</b> 6%+ Monitoring\n"
+                        f"<b>Status:</b> DEAD (no heartbeat for 5+ minutes)\n"
+                        f"<b>Action:</b> Auto-restarting now...\n"
+                        f"<b>Restart Count:</b> {restart_count['monitoring']}\n\n"
+                        f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                    )
+                    send_telegram_alert(alert_text)
+                    
+                    # Restart thread
+                    threading.Thread(target=monitor_6percent_pre_move, daemon=True).start()
+                    logger.info("Monitoring thread restarted by watchdog")
+                    
+                    with session_state_lock:
+                        if hasattr(st, 'session_state'):
+                            st.session_state.setdefault('learning_log', []).append(
+                                f"🔴 Monitoring Thread DEAD - Auto-restarted by watchdog (attempt #{restart_count['monitoring']})"
+                            )
+            
+            # Sleep for 5 minutes before next check
+            time.sleep(300)
+            
+        except Exception as e:
+            log_error(ErrorSeverity.CRITICAL, "thread_watchdog", e, user_message="Watchdog error", show_to_user=False)
+            update_heartbeat("watchdog")
+            time.sleep(60)  # Shorter sleep on error
 
 # ================================
 # AUTO-RESTART THREADS
@@ -1366,6 +1635,15 @@ def initialize_background_threads():
                 logger.info("Monitoring started")
         except Exception as e:
             log_error(ErrorSeverity.ERROR, "initialize_background_threads", e, user_message="Monitoring start failed")
+        
+        # Always start watchdog if either thread is enabled
+        try:
+            if daemon_config.get("enabled", False) or monitoring_config.get("enabled", False):
+                threading.Thread(target=thread_watchdog, daemon=True).start()
+                st.session_state['learning_log'].append("✅ Watchdog auto-started")
+                logger.info("Watchdog started")
+        except Exception as e:
+            log_error(ErrorSeverity.ERROR, "initialize_background_threads", e, user_message="Watchdog start failed")
 
 # ================================
 # ERROR DASHBOARD
@@ -1486,6 +1764,29 @@ with st.sidebar:
                 log_error(ErrorSeverity.ERROR, "force_retrain", e, ticker=ticker, user_message="Retrain failed")
 
     st.markdown("---")
+    if st.button("🚀 Bootstrap All Models", use_container_width=True):
+        with st.spinner("Training all models... This will take 5-10 minutes"):
+            try:
+                all_tickers = [t for cat in ASSET_CATEGORIES.values() for _, t in cat.items()]
+                progress_bar = st.progress(0)
+                total = len(all_tickers)
+                
+                for idx, train_ticker in enumerate(all_tickers):
+                    st.write(f"Training {train_ticker}... ({idx+1}/{total})")
+                    try:
+                        train_self_learning_model(train_ticker, days=5, force_retrain=True)
+                    except Exception as e:
+                        log_error(ErrorSeverity.ERROR, "bootstrap_training", e, ticker=train_ticker, 
+                                  user_message=f"Failed to train {train_ticker}", show_to_user=False)
+                    progress_bar.progress((idx + 1) / total)
+                
+                st.success("✅ All models trained!")
+                time.sleep(2)
+                st.rerun()
+            except Exception as e:
+                log_error(ErrorSeverity.ERROR, "bootstrap_all", e, user_message="Bootstrap failed")
+
+    st.markdown("---")
     st.subheader("🤖 Learning Daemon")
     
     try:
@@ -1597,7 +1898,7 @@ with col2:
 st.markdown("---")
 
 # Tabs
-tab1, tab2, tab3 = st.tabs(["📈 Learning Activity", "🔍 Error Monitoring", "📊 Performance"])
+tab1, tab2, tab3, tab4 = st.tabs(["📈 Learning Activity", "🔍 Error Monitoring", "📊 Performance", "🔧 System Diagnostics"])
 
 with tab1:
     st.subheader("🧠 Self-Learning Activity")
@@ -1636,26 +1937,206 @@ with tab3:
     st.subheader("📊 All Models")
     try:
         all_assets = []
+        broken_models = []  # Track models that need fixing
+        
         for cat_name, assets in ASSET_CATEGORIES.items():
             for asset_name, asset_ticker in assets.items():
                 meta = load_metadata(asset_ticker)
                 acc_log = load_accuracy_log(asset_ticker)
+                
                 if meta["trained_date"]:
+                    # Get current price
+                    try:
+                        current_price = get_latest_price(asset_ticker)
+                    except:
+                        current_price = None
+                    
+                    # Get tomorrow's prediction from file
+                    tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+                    pred_path = get_prediction_path(asset_ticker, tomorrow)
+                    predicted_price = None
+                    price_change = None
+                    
+                    if pred_path.exists():
+                        try:
+                            with open(pred_path, 'r') as f:
+                                pred_data = json.load(f)
+                            predicted_price = pred_data.get("predicted_price")
+                            if predicted_price and current_price:
+                                price_change = ((predicted_price - current_price) / current_price) * 100
+                        except:
+                            pass
+                    
+                    # Calculate accuracy
+                    accuracy_value = acc_log.get('avg_error', 0)
+                    accuracy_pct = (1 - accuracy_value) * 100 if acc_log['total_predictions'] > 0 else None
+                    
+                    # Determine model health
+                    health = "🔴"  # Red = broken
+                    if accuracy_pct is None:
+                        health = "⚪"  # White = no data yet
+                    elif accuracy_pct < 0:
+                        health = "🔴"  # Red = negative accuracy (broken)
+                        broken_models.append(asset_ticker)
+                    elif accuracy_pct < 50:
+                        health = "🔴"  # Red = very poor
+                        broken_models.append(asset_ticker)
+                    elif accuracy_pct < 70:
+                        health = "🟡"  # Yellow = needs improvement
+                    elif accuracy_pct < 85:
+                        health = "🟢"  # Green = good
+                    else:
+                        health = "💚"  # Dark green = excellent
+                    
+                    # Format current price
+                    if current_price:
+                        current_price_str = f"${current_price:.2f}"
+                    else:
+                        current_price_str = "N/A"
+                    
+                    # Format prediction
+                    if predicted_price and price_change is not None:
+                        pred_str = f"${predicted_price:.2f} ({price_change:+.1f}%)"
+                    elif predicted_price:
+                        pred_str = f"${predicted_price:.2f}"
+                    else:
+                        pred_str = "N/A"
+                    
                     all_assets.append({
+                        "Health": health,
                         "Asset": asset_name,
                         "Ticker": asset_ticker,
+                        "Last Close": current_price_str,
+                        "Tomorrow": pred_str,
                         "Version": meta["version"],
                         "Retrains": meta["retrain_count"],
-                        "Accuracy": f"{(1 - acc_log['avg_error'])*100:.1f}%" if acc_log['total_predictions'] > 0 else "N/A",
+                        "Accuracy": f"{accuracy_pct:.1f}%" if accuracy_pct is not None else "N/A",
                         "Predictions": acc_log["total_predictions"],
                         "Last Trained": meta["trained_date"][:10]
                     })
         
         if all_assets:
             st.dataframe(pd.DataFrame(all_assets), width='stretch', hide_index=True)
+            
+            # Legend
+            st.markdown("""
+            **Health Legend:** 💚 Excellent (85%+) | 🟢 Good (70-85%) | 🟡 Fair (50-70%) | 🔴 Poor (<50%) | ⚪ No data
+            """)
+            
+            # Auto-fix broken models
+            if broken_models:
+                st.warning(f"⚠️ **{len(broken_models)} broken models detected** (negative or very poor accuracy)")
+                
+                if st.button("🔧 Auto-Fix All Broken Models", use_container_width=True):
+                    with st.spinner(f"Fixing {len(broken_models)} broken models..."):
+                        progress_bar = st.progress(0)
+                        for idx, broken_ticker in enumerate(broken_models):
+                            st.write(f"Fixing {broken_ticker}...")
+                            try:
+                                # Delete old model and scaler files
+                                model_path = get_model_path(broken_ticker)
+                                scaler_path = get_scaler_path(broken_ticker)
+                                if model_path.exists():
+                                    model_path.unlink()
+                                if scaler_path.exists():
+                                    scaler_path.unlink()
+                                
+                                # Force full retrain
+                                train_self_learning_model(broken_ticker, days=5, force_retrain=True)
+                                st.success(f"✅ Fixed {broken_ticker}")
+                            except Exception as e:
+                                log_error(ErrorSeverity.ERROR, "auto_fix_broken", e, ticker=broken_ticker,
+                                          user_message=f"Failed to fix {broken_ticker}", show_to_user=False)
+                                st.error(f"❌ Failed to fix {broken_ticker}")
+                            
+                            progress_bar.progress((idx + 1) / len(broken_models))
+                        
+                        st.success("✅ All broken models fixed!")
+                        time.sleep(2)
+                        st.rerun()
         else:
             st.info("No models trained")
     except Exception as e:
         log_error(ErrorSeverity.ERROR, "all_models_tab", e, user_message="Models data error")
+
+with tab4:
+    st.subheader("🔧 System Diagnostics")
+    
+    st.write("**Model Files Status:**")
+    
+    try:
+        diagnostic_data = []
+        all_tickers = [t for cat in ASSET_CATEGORIES.values() for _, t in cat.items()]
+        
+        for ticker in all_tickers:
+            model_exists = get_model_path(ticker).exists()
+            scaler_exists = get_scaler_path(ticker).exists()
+            meta = load_metadata(ticker)
+            acc = load_accuracy_log(ticker)
+            
+            # Get asset name
+            asset_name = ticker
+            for cat_name, assets in ASSET_CATEGORIES.items():
+                for name, tick in assets.items():
+                    if tick == ticker:
+                        asset_name = name
+                        break
+            
+            status_icon = "✅" if model_exists else "❌"
+            trained_date = meta.get('trained_date', 'Never')
+            if trained_date and trained_date != 'Never':
+                try:
+                    trained_date = trained_date[:10]
+                except (TypeError, AttributeError):
+                    trained_date = 'Never'
+            
+            diagnostic_data.append({
+                "Status": status_icon,
+                "Asset": asset_name,
+                "Ticker": ticker,
+                "Model": "Yes" if model_exists else "No",
+                "Scaler": "Yes" if scaler_exists else "No",
+                "Trained": trained_date,
+                "Predictions": acc.get('total_predictions', 0),
+                "Retrains": meta.get('retrain_count', 0),
+                "Avg Error": f"{acc.get('avg_error', 0):.1%}" if acc.get('total_predictions', 0) > 0 else "N/A"
+            })
+        
+        df = pd.DataFrame(diagnostic_data)
+        st.dataframe(df, width='stretch', hide_index=True)
+        
+        # Summary stats
+        st.markdown("---")
+        col1, col2, col3, col4 = st.columns(4)
+        
+        trained_count = sum(1 for d in diagnostic_data if d['Model'] == 'Yes')
+        total_count = len(diagnostic_data)
+        total_predictions = sum(d['Predictions'] for d in diagnostic_data)
+        avg_retrains = sum(d['Retrains'] for d in diagnostic_data) / total_count if total_count > 0 else 0
+        
+        with col1:
+            st.metric("Models Trained", f"{trained_count}/{total_count}")
+        with col2:
+            st.metric("Total Predictions", total_predictions)
+        with col3:
+            st.metric("Avg Retrains", f"{avg_retrains:.1f}")
+        with col4:
+            ready_count = sum(1 for d in diagnostic_data if d['Predictions'] >= 12 and d['Retrains'] >= 2)
+            st.metric("High-Confidence Ready", f"{ready_count}/{total_count}")
+        
+        # System health indicator
+        st.markdown("---")
+        if trained_count == 0:
+            st.error("⚠️ **No models trained yet!** Click '🚀 Bootstrap All Models' in the sidebar to get started.")
+        elif trained_count < total_count:
+            st.warning(f"⚠️ **{total_count - trained_count} models need training.** Use the bootstrap button or wait for the daemon.")
+        elif ready_count == 0:
+            st.info("📊 **Models trained but need validation data.** Predictions will accumulate daily. Check back in 12+ days for high-confidence recommendations.")
+        else:
+            st.success(f"✅ **System ready!** {ready_count} models meet high-confidence criteria.")
+        
+    except Exception as e:
+        log_error(ErrorSeverity.ERROR, "diagnostics_tab", e, user_message="Diagnostics error")
+        st.error("Failed to load diagnostics")
 
 add_footer()
