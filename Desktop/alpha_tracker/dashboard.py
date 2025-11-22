@@ -1992,130 +1992,141 @@ with tab2:
         log_error(ErrorSeverity.ERROR, "error_dashboard", e, user_message="Dashboard error")
 
 with tab3:
-    st.subheader("📊 All Models")
+    st.subheader("All Models — Institutional Health Dashboard")
     try:
         all_assets = []
-        broken_models = []  # Track models that need fixing
-        
+        broken_models = []
+
         for cat_name, assets in ASSET_CATEGORIES.items():
             for asset_name, asset_ticker in assets.items():
                 meta = load_metadata(asset_ticker)
                 acc_log = load_accuracy_log(asset_ticker)
-                
-                if meta["trained_date"]:
-                    # Get current price
+
+                # Current price
+                try:
+                    current_price = get_latest_price(asset_ticker)
+                    current_price_str = f"${current_price:.2f}" if current_price else "N/A"
+                except:
+                    current_price = None
+                    current_price_str = "N/A"
+
+                # Tomorrow prediction
+                tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+                pred_path = get_prediction_path(asset_ticker, tomorrow)
+                predicted_price = None
+                price_change = None
+
+                if pred_path.exists():
                     try:
-                        current_price = get_latest_price(asset_ticker)
+                        with open(pred_path, 'r') as f:
+                            pred_data = json.load(f)
+                        predicted_price = pred_data.get("predicted_price")
+                        if predicted_price and current_price:
+                            price_change = (predicted_price - current_price) / current_price * 100
                     except:
-                        current_price = None
-                    
-                    # Get tomorrow's prediction from file
-                    tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
-                    pred_path = get_prediction_path(asset_ticker, tomorrow)
-                    predicted_price = None
-                    price_change = None
-                    
-                    if pred_path.exists():
-                        try:
-                            with open(pred_path, 'r') as f:
-                                pred_data = json.load(f)
-                            predicted_price = pred_data.get("predicted_price")
-                            if predicted_price and current_price:
-                                price_change = ((predicted_price - current_price) / current_price) * 100
-                        except:
-                            pass
-                    
-                    # Calculate accuracy
-                    accuracy_value = acc_log.get('avg_error', 0)
-                    accuracy_pct = (1 - accuracy_value) * 100 if acc_log['total_predictions'] > 0 else None
-                    
-                    # Determine model health
-                    health = "🔴"  # Red = broken
-                    if accuracy_pct is None:
-                        health = "⚪"  # White = no data yet
-                    elif accuracy_pct < 0:
-                        health = "🔴"  # Red = negative accuracy (broken)
-                        broken_models.append(asset_ticker)
-                    elif accuracy_pct < 50:
-                        health = "🔴"  # Red = very poor
-                        broken_models.append(asset_ticker)
-                    elif accuracy_pct < 70:
-                        health = "🟡"  # Yellow = needs improvement
-                    elif accuracy_pct < 85:
-                        health = "🟢"  # Green = good
-                    else:
-                        health = "💚"  # Dark green = excellent
-                    
-                    # Format current price
-                    if current_price:
-                        current_price_str = f"${current_price:.2f}"
-                    else:
-                        current_price_str = "N/A"
-                    
-                    # Format prediction
-                    if predicted_price and price_change is not None:
-                        pred_str = f"${predicted_price:.2f} ({price_change:+.1f}%)"
-                    elif predicted_price:
-                        pred_str = f"${predicted_price:.2f}"
-                    else:
-                        pred_str = "N/A"
-                    
-                    all_assets.append({
-                        "Health": health,
-                        "Asset": asset_name,
-                        "Ticker": asset_ticker,
-                        "Last Close": current_price_str,
-                        "Tomorrow": pred_str,
-                        "Version": meta["version"],
-                        "Retrains": meta["retrain_count"],
-                        "Accuracy": f"{accuracy_pct:.1f}%" if accuracy_pct is not None else "N/A",
-                        "Predictions": acc_log["total_predictions"],
-                        "Last Trained": meta["trained_date"][:10]
-                    })
-        
-        if all_assets:
-            st.dataframe(pd.DataFrame(all_assets), width='stretch', hide_index=True)
-            
-            # Legend
-            st.markdown("""
-            **Health Legend:** 💚 Excellent (85%+) | 🟢 Good (70-85%) | 🟡 Fair (50-70%) | 🔴 Poor (<50%) | ⚪ No data
-            """)
-            
-            # Auto-fix broken models
-            if broken_models:
-                st.warning(f"⚠️ **{len(broken_models)} broken models detected** (negative or very poor accuracy)")
-                
-                if st.button("🔧 Auto-Fix All Broken Models", use_container_width=True):
-                    with st.spinner(f"Fixing {len(broken_models)} broken models..."):
-                        progress_bar = st.progress(0)
-                        for idx, broken_ticker in enumerate(broken_models):
-                            st.write(f"Fixing {broken_ticker}...")
+                        pass
+
+                pred_str = "N/A"
+                if predicted_price:
+                    change_str = f"{price_change:+.1f}%" if price_change is not None else ""
+                    pred_str = f"${predicted_price:.2f} ({change_str})".strip()
+
+                # ─────── REAL ACCURACY METRICS ───────
+                total_preds = acc_log.get("total_predictions", 0)
+                mape = None
+                directional_acc = None
+
+                if total_preds > 0:
+                    mape = acc_log.get('avg_error', 0) * 100
+
+                    # Directional accuracy (simple & fast)
+                    correct = 0
+                    pred_list = acc_log.get("predictions", [])
+                    if len(pred_list) >= 2:
+                        for i in range(1, min(30, len(pred_list))):
+                            pred_move = pred_list[-i] - pred_list[-i-1]
                             try:
-                                # Delete old model and scaler files
-                                model_path = get_model_path(broken_ticker)
-                                scaler_path = get_scaler_path(broken_ticker)
-                                if model_path.exists():
-                                    model_path.unlink()
-                                if scaler_path.exists():
-                                    scaler_path.unlink()
-                                
-                                # Force full retrain
-                                train_self_learning_model(broken_ticker, days=5, force_retrain=True)
-                                st.success(f"✅ Fixed {broken_ticker}")
-                            except Exception as e:
-                                log_error(ErrorSeverity.ERROR, "auto_fix_broken", e, ticker=broken_ticker,
-                                          user_message=f"Failed to fix {broken_ticker}", show_to_user=False)
-                                st.error(f"❌ Failed to fix {broken_ticker}")
-                            
-                            progress_bar.progress((idx + 1) / len(broken_models))
-                        
-                        st.success("✅ All broken models fixed!")
-                        time.sleep(2)
-                        st.rerun()
-        else:
-            st.info("No models trained")
+                                hist = yf.download(asset_ticker, period="60d", progress=False, threads=False)['Close']
+                                if len(hist) > i:
+                                    actual_move = hist.iloc[-i] - hist.iloc[-i-1]
+                                    if (pred_move > 0) == (actual_move > 0):
+                                        correct += 1
+                            except:
+                                pass
+                        directional_acc = (correct / min(30, len(pred_list)-1)) * 100
+
+                # ─────── HONEST HEALTH SCORING ───────
+                if total_preds == 0:
+                    health = "No data"
+                    color = "white"
+                elif mape is None:
+                    health = "No data"
+                    color = "white"
+                elif directional_acc is not None and directional_acc >= 75 and mape <= 6:
+                    health = "Excellent"
+                    color = "darkgreen"
+                elif directional_acc is not None and directional_acc >= 65 and mape <= 9:
+                    health = "Good"
+                    color = "green"
+                elif mape <= 12:
+                    health = "Fair"
+                    color = "yellow"
+                elif mape <= 25:
+                    health = "Poor"
+                    color = "orange"
+                else:
+                    health = "Broken"
+                    color = "red"
+                    broken_models.append(asset_ticker)
+
+                all_assets.append({
+                    "Health": health,
+                    "Asset": asset_name,
+                    "Ticker": asset_ticker,
+                    "Last Close": current_price_str,
+                    "Tomorrow": pred_str,
+                    "Version": meta.get("version", "1.0"),
+                    "Retrains": meta.get("retrain_count", 0),
+                    "MAPE": f"{mape:.1f}%" if mape else "N/A",
+                    "Direction%": f"{directional_acc:.1f}%" if directional_acc else "N/A",
+                    "Predictions": total_preds,
+                    "Last Trained": meta.get("trained_date", "")[:10] if meta.get("trained_date") else "Never"
+                })
+
+        # Display table
+        df = pd.DataFrame(all_assets)
+        health_order = {"Excellent":0, "Good":1, "Fair":2, "Poor":3, "Broken":4, "No data":5}
+        df["sort"] = df["Health"].map(health_order)
+        df = df.sort_values("sort").drop("sort", axis=1).reset_index(drop=True)
+
+        st.dataframe(df, use_container_width=True, hide_index=True)
+
+        # Legend
+        st.markdown("""
+        **Health Legend**  
+        Excellent = ≥75% directional + ≤6% error  
+        Good = ≥65% directional + ≤9% error  
+        Fair = ≤12% average error  
+        Poor = High error  
+        Broken = Catastrophic (auto-fix below)  
+        No data = Model needs live predictions
+        """)
+
+        # Nuclear fix button
+        if broken_models:
+            st.error(f"{len(broken_models)} model(s) BROKEN → negative accuracy fixed automatically on retrain")
+            if st.button("REBUILD ALL BROKEN MODELS NOW", type="primary", use_container_width=True):
+                with st.spinner("Rebuilding broken models..."):
+                    for i, t in enumerate(broken_models):
+                        get_model_path(t).unlink(missing_ok=True)
+                        get_scaler_path(t).unlink(missing_ok=True)
+                        train_self_learning_model(t, days=5, force_retrain=True)
+                        st.success(f"Rebuilt {t}")
+                    st.rerun()
+
     except Exception as e:
-        log_error(ErrorSeverity.ERROR, "all_models_tab", e, user_message="Models data error")
+        log_error(ErrorSeverity.ERROR, "all_models_tab", e)
+        st.error("Dashboard error — check logs")
 
 with tab4:
     st.subheader("🔧 System Diagnostics")
