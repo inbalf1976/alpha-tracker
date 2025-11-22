@@ -42,8 +42,13 @@ except (ImportError, AttributeError):
 # ================================
 def is_admin_user():
     """Check if user has admin privileges (local PC only)"""
-    admin_env = os.getenv("ALLOW_ADMIN_CONTROLS", "false").lower()
-    return admin_env == "true"
+    # If DEPLOYMENT_MODE is set to "online", block admin controls
+    deployment_mode = os.getenv("DEPLOYMENT_MODE", "local").lower()
+    
+    if deployment_mode == "online":
+        return False  # Online users = no admin access
+    else:
+        return True  # Local users (default) = full admin access
 
 # ================================
 # LOGGING SETUP
