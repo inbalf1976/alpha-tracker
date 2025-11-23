@@ -35,13 +35,74 @@ try:
 except:
     pass
 
-# Graceful fallback for pattern_checker
-try:
-    from pattern_checker import check_auto_patterns
-except ImportError:
-    def check_auto_patterns(ticker, data):
+
+# ================================
+# LIVE HYBRID PATTERN MINER INTEGRATION
+# ================================
+AUTO_PATTERNS_FILE = Path("auto_patterns.json")
+
+def check_auto_patterns(ticker: str, data: pd.DataFrame = None) -> tuple:
+    if not AUTO_PATTERNS_FILE.exists():
         return 0, [], "NEUTRAL", 0
 
+    try:
+        raw = json.loads(AUTO_PATTERNS_FILE.read_text(encoding="utf-8"))
+        if "patterns" not in raw:
+            return 0, [], "NEUTRAL", 0
+
+        ticker_clean = ticker.replace('=F', '').replace('^', '').split('.')[0].upper()
+        now = datetime.now()
+        best_match = None
+        best_auc = 0
+
+        for pat in raw["patterns"]:
+            if pat.get("ticker", "").upper() != ticker_clean:
+                continue
+            try:
+                pat_time = datetime.strptime(pat.get("timestamp", ""), "%Y-%m-%d %H:%M")
+                if (now - pat_time).total_seconds() > 86400:
+                    continue
+            except:
+                continue
+
+            auc = pat.get("auc_mean", 0)
+            if auc > best_auc:
+                best_auc = auc
+                best_match = pat
+
+        if not best_match:
+            return 0, [], "NEUTRAL", 0
+
+        boost = best_match.get("boost", 0)
+        bias = best_match.get("direction_bias", "NEUTRAL")
+        direction = "DOWN" if bias == "DOWN" else "UP" if bias == "UP" else "NEUTRAL"
+        timeframe = best_match.get("timeframe", "unknown")
+        model = best_match.get("model", "unknown").upper()
+        auc_val = best_match.get("auc_mean", 0)
+
+        confidence = min(99, int(auc_val * 100 + boost // 2.5))
+
+        triggers = [
+            f"{model} AUC {auc_val:.3f}",
+            f"Boost +{boost}",
+            f"{timeframe.upper()} ELITE",
+            f"Bias {bias}"
+        ]
+
+        if ticker_clean == "MSTR" and bias == "DOWN" and boost >= 160:
+            direction = "UP"
+            triggers.append("TRAP to REVERSAL")
+            confidence = 99
+
+        return boost, triggers, direction, confidence
+
+    except Exception as e:
+        # You'll need log_error defined later — safe fallback
+        try:
+            log_error(ErrorSeverity.WARNING, "check_auto_patterns", e, ticker=ticker, show_to_user=False)
+        except:
+            pass
+        return 0, [], "NEUTRAL", 0
 # ================================
 # LOGGING SETUP
 # ================================
@@ -910,43 +971,87 @@ with col2:
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Dashboard", "📈 5-Day Forecast", "🏥 All Models", "🔬 Backtesting", "🔍 Diagnostics"])
 
 with tab1:
-    if st.button("🎯 Daily Recommendation", use_container_width=True):
+    if st.button("Daily Recommendation", use_container_width=True):
         with st.spinner("Analyzing..."):
             forecast, _, _ = train_self_learning_model(ticker, days=1)
-            if forecast:
-                passed, reasons = high_confidence_checklist(ticker, forecast, price or 100)
+            
+            # ← BULLETPROOF FORECAST CHECK
+            if forecast is not None and len(np.array(forecast).flatten()) > 0:
+                forecast_val = float(np.array(forecast).flatten()[0])
+                passed, reasons = high_confidence_checklist(ticker, [forecast_val], price or 100)
+                
                 if passed:
-                    change = (forecast[0] - price)/price*100 if price else 0
-                    action = "STRONG BUY" if change >= 3 else "BUY" if change >= 1.5 else "SELL" if change <= -1.5 else "HOLD"
-                    st.success(f"✅ AI Predicts: ${forecast[0]:.2f} ({change:+.2f}%) → **{action}**")
+                    change_pct = (forecast_val - price) / price * 100 if price else 0
+                    if change_pct >= 3:
+                        action = "STRONG BUY"
+                    elif change_pct >= 1.5:
+                        action = "BUY"
+                    elif change_pct <= -1.5:
+                        action = "SELL"
+                    else:
+                        action = "HOLD"
+                    st.success(f"AI Predicts: ${forecast_val:.2f} ({change_pct:+.2f}%) → **{action}**")
                 else:
-                    st.warning(f"⚠️ Low Confidence\n\n" + "\n".join([f"• {r}" for r in reasons]))
+                    st.warning("Low Confidence\n\n" + "\n".join([f"• {r}" for r in reasons]))
             else:
-                st.error("❌ Forecast failed")
+                st.error("Forecast failed or no data")
 
 with tab2:
-    if st.button("🔮 Generate 5-Day Forecast", use_container_width=True):
+    if st.button("Generate 5-Day Forecast", use_container_width=True):
         with st.spinner("Forecasting..."):
             forecast, dates, _ = train_self_learning_model(ticker, days=5)
-            if forecast:
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(x=dates, y=forecast, mode='lines+markers', name='AI Forecast', 
-                                        line=dict(color="#00C853", width=4)))
-                if price:
-                    fig.add_trace(go.Scatter(x=dates[:1], y=[price], mode='markers', name='Current', 
-                                            marker=dict(color="white", size=12)))
-                fig.update_layout(title=f"{asset} - 5-Day AI Forecast", template="plotly_dark", height=600)
-                st.plotly_chart(fig, use_container_width=True)
+            
+            # ← BULLETPROOF FORECAST + DATES CHECK
+            if (forecast is not None and 
+                dates is not None and 
+                len(forecast) > 0 and 
+                len(dates) > 0):
                 
+                # Force to Python lists & flatten
+                forecast = np.array(forecast).flatten().tolist()
+                if len(forecast) > len(dates):
+                    forecast = forecast[:len(dates)]
+
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(
+                    x=dates, y=forecast,
+                    mode='lines+markers',
+                    name='AI Forecast',
+                    line=dict(color="#00C853", width=4)
+                ))
+                if price:
+                    fig.add_trace(go.Scatter(
+                        x=dates[:1], y=[price],
+                        mode='markers',
+                        name='Current Price',
+                        marker=dict(color="white", size=14, symbol="circle")
+                    ))
+
+                fig.update_layout(
+                    title=f"{asset} - 5-Day AI Forecast",
+                    template="plotly_dark",
+                    height=620,
+                    hovermode="x unified"
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+                # Safe indexing
+                f1 = forecast[0]
+                f3 = forecast[min(2, len(forecast)-1)]
+                f5 = forecast[min(4, len(forecast)-1)]
+
                 col1, col2, col3 = st.columns(3)
                 with col1:
-                    st.metric("Day 1", f"${forecast[0]:.2f}", f"{(forecast[0]-price)/price*100:+.2f}%" if price else None)
+                    st.metric("Tomorrow", f"${f1:.2f}", 
+                             f"{(f1-price)/price*100:+.2f}%" if price else None)
                 with col2:
-                    st.metric("Day 3", f"${forecast[2]:.2f}", f"{(forecast[2]-price)/price*100:+.2f}%" if price else None)
+                    st.metric("Day +3", f"${f3:.2f}", 
+                             f"{(f3-price)/price*100:+.2f}%" if price else None)
                 with col3:
-                    st.metric("Day 5", f"${forecast[4]:.2f}", f"{(forecast[4]-price)/price*100:+.2f}%" if price else None)
+                    st.metric("Day +5", f"${f5:.2f}", 
+                             f"{(f5-price)/price*100:+.2f}%" if price else None)
             else:
-                st.error("❌ Forecast failed")
+                st.error("Forecast failed — no valid data returned")
 
 with tab3:
     st.subheader("All Models — Institutional Health Dashboard")
