@@ -76,22 +76,25 @@ def get_latest_price_robust(ticker: str):
     return None
 
 # ───────────────────────────────
-# 1. YFINANCE 401 + TIMEOUT FIX – FINAL WORKING VERSION (2025)
+# 1. YFINANCE 401 + TIMEOUT FIX (NUCLEAR PATCH) – 2025 FINAL VERSION
 # ───────────────────────────────
 from requests_cache import CacheMixin
 from requests_ratelimiter import LimiterMixin
 from requests import Session
-from pyrate_limiter import Duration, Limiter
+from pyrate_limiter import Duration, RequestRate, Limiter  # ← CORRECT IMPORTS
 
 class LimitedCachedSession(CacheMixin, LimiterMixin, Session):
     pass
 
-# 2 requests per 1 second = 2 req/sec max (perfect for Yahoo)
+# 2 requests per second = 2 req per 1000ms (perfect for Yahoo Finance)
+rate = RequestRate(2, Duration.SECOND * 1000)  # ← FIXED: Use RequestRate
+limiter = Limiter(rate)  # ← FIXED: Limiter takes RequestRate(s)
+
 session = LimitedCachedSession(
-    limiter=Limiter(2, Duration.SECOND),
+    limiter=limiter,  # ← FIXED: Now passes the correct Limiter object
     bucket="yfinance",
-    expire_after=300,
-    backend="sqlite"
+    expire_after=300,  # Cache expires after 5 minutes
+    backend="sqlite"   # SQLite for persistence
 )
 
 session.headers.update({
@@ -106,7 +109,6 @@ yf.shared._BASE_URL_ = "https://query2.finance.yahoo.com"
 # Monkey-patch download & Ticker to always use session
 yf.download = functools.partial(yf.download, session=session, auto_adjust=True, progress=False, threads=False)
 yf.Ticker = lambda ticker, *args, **kwargs: yf.Ticker(ticker, session=session, *args, **kwargs)
-
 # Suppress TF & warnings
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
