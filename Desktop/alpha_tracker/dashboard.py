@@ -60,12 +60,18 @@ def check_auto_patterns(ticker: str, data: pd.DataFrame = None) -> tuple:
                 continue
             try:
                 pat_time = datetime.strptime(pat.get("timestamp", ""), "%Y-%m-%d %H:%M")
-                if (now - pat_time).total_seconds() > 86400:
+                # Prefer fresh patterns (< 1 hour), but accept up to 6 hours
+                age_hours = (now - pat_time).total_seconds() / 3600
+                if age_hours > 6:  # ← Changed from 24h to 6h for real-time detection
                     continue
+                    
+                # Penalize old patterns
+                freshness_factor = 1.0 if age_hours < 1 else 0.8 if age_hours < 3 else 0.6
+                
             except:
                 continue
 
-            auc = pat.get("auc_mean", 0)
+            auc = pat.get("auc_mean", 0) * freshness_factor  # ← Apply freshness penalty
             if auc > best_auc:
                 best_auc = auc
                 best_match = pat
@@ -73,7 +79,7 @@ def check_auto_patterns(ticker: str, data: pd.DataFrame = None) -> tuple:
         if not best_match:
             return 0, [], "NEUTRAL", 0
 
-        boost = best_match.get("boost", 0)
+        boost = int(best_match.get("boost", 0) * freshness_factor)  # ← Reduce stale boosts
         bias = best_match.get("direction_bias", "NEUTRAL")
         direction = "DOWN" if bias == "DOWN" else "UP" if bias == "UP" else "NEUTRAL"
         timeframe = best_match.get("timeframe", "unknown")
@@ -88,11 +94,6 @@ def check_auto_patterns(ticker: str, data: pd.DataFrame = None) -> tuple:
             f"{timeframe.upper()} ELITE",
             f"Bias {bias}"
         ]
-
-        if ticker_clean == "MSTR" and bias == "DOWN" and boost >= 160:
-            direction = "UP"
-            triggers.append("TRAP to REVERSAL")
-            confidence = 99
 
         return boost, triggers, direction, confidence
 
@@ -130,15 +131,27 @@ def setup_logging():
     logger = logging.getLogger('stock_tracker')
     logger.setLevel(logging.DEBUG)
     logger.handlers.clear()
+    
+    # Console handler with UTF-8 encoding (Windows fix)
     console = logging.StreamHandler()
     console.setLevel(logging.INFO)
     console.setFormatter(logging.Formatter('%(asctime)s | %(levelname)-8s | %(message)s', '%Y-%m-%d %H:%M:%S'))
-    file = RotatingFileHandler(LOG_DIR / 'app.log', maxBytes=10*1024*1024, backupCount=5)
+    # Fix Windows emoji encoding issues
+    if hasattr(console.stream, 'reconfigure'):
+        try:
+            console.stream.reconfigure(encoding='utf-8')
+        except:
+            pass
+    
+    # File handlers with explicit UTF-8 encoding
+    file = RotatingFileHandler(LOG_DIR / 'app.log', maxBytes=10*1024*1024, backupCount=5, encoding='utf-8')
     file.setLevel(logging.DEBUG)
     file.setFormatter(logging.Formatter('%(asctime)s | %(levelname)-8s | %(funcName)s | %(message)s', '%Y-%m-%d %H:%M:%S'))
-    error = RotatingFileHandler(LOG_DIR / 'errors.log', maxBytes=5*1024*1024, backupCount=3)
+    
+    error = RotatingFileHandler(LOG_DIR / 'errors.log', maxBytes=5*1024*1024, backupCount=3, encoding='utf-8')
     error.setLevel(logging.ERROR)
     error.setFormatter(file.formatter)
+    
     logger.addHandler(console)
     logger.addHandler(file)
     logger.addHandler(error)
@@ -223,6 +236,18 @@ accuracy_lock = threading.Lock()
 config_lock = threading.Lock()
 session_state_lock = threading.Lock()
 heartbeat_lock = threading.Lock()
+
+# Per-ticker training locks (prevents concurrent training of same ticker)
+TRAINING_LOCKS = {}
+TRAINING_LOCKS_LOCK = threading.Lock()
+
+def get_training_lock(ticker):
+    """Get or create a lock for a specific ticker"""
+    with TRAINING_LOCKS_LOCK:
+        if ticker not in TRAINING_LOCKS:
+            TRAINING_LOCKS[ticker] = threading.Lock()
+        return TRAINING_LOCKS[ticker]
+
 THREAD_HEARTBEATS = {"learning_daemon": None, "monitoring": None, "watchdog": None}
 THREAD_START_TIMES = {"learning_daemon": None, "monitoring": None, "watchdog": None}
 
@@ -469,84 +494,95 @@ def build_lstm_model():
     return model
 
 def train_self_learning_model(ticker, days=5, force_retrain=False):
-    logger.info(f"Training {ticker} (force={force_retrain})")
-    updated, acc_log = validate_predictions(ticker)
-    meta = load_metadata(ticker)
-    needs, reasons = should_retrain(ticker, acc_log, meta)
-    if needs or force_retrain:
-        if 'st' in globals() and hasattr(st, 'session_state'):
-            st.session_state.setdefault('learning_log', []).append(f"🔄 Retraining {ticker}: {', '.join(reasons)}")
+    # Acquire ticker-specific lock (prevents concurrent training)
+    lock = get_training_lock(ticker)
+    if not lock.acquire(blocking=False):
+        logger.warning(f"Training {ticker} already in progress by another thread, skipping")
+        return None, None, None
+    
+    try:
+        logger.info(f"Training {ticker} (force={force_retrain})")
+        updated, acc_log = validate_predictions(ticker)
+        meta = load_metadata(ticker)
+        needs, reasons = should_retrain(ticker, acc_log, meta)
+        if needs or force_retrain:
+            if 'st' in globals() and hasattr(st, 'session_state'):
+                st.session_state.setdefault('learning_log', []).append(f"🔄 Retraining {ticker}: {', '.join(reasons)}")
 
-    df = yf.download(ticker, period="1y", progress=False)
-    df = normalize_dataframe_columns(df)
-    if df is None or len(df) < 100: return None, None, None
-    df = df[['Close']].ffill().bfill()
-    if df['Close'].isna().any(): return None, None, None
+        df = yf.download(ticker, period="1y", progress=False)
+        df = normalize_dataframe_columns(df)
+        if df is None or len(df) < 100: return None, None, None
+        df = df[['Close']].ffill().bfill()
+        if df['Close'].isna().any(): return None, None, None
 
-    scaler_path = get_scaler_path(ticker)
-    if force_retrain or not scaler_path.exists():
-        scaler = MinMaxScaler()
-        scaler.fit(df[['Close']])
-        joblib.dump(scaler, scaler_path)
-    else:
-        scaler = joblib.load(scaler_path)
-
-    scaled = scaler.transform(df[['Close']])
-    X, y = [], []
-    lookback = LEARNING_CONFIG["lookback_window"]
-    for i in range(lookback, len(scaled)):
-        X.append(scaled[i-lookback:i])
-        y.append(scaled[i])
-    X, y = np.array(X), np.array(y)
-    if len(X) == 0: return None, None, None
-
-    with model_cache_lock:
-        model = None
-        if force_retrain or needs:
-            model = build_lstm_model()
-            model.fit(X, y, epochs=LEARNING_CONFIG["full_retrain_epochs"], batch_size=32, verbose=0,
-                      validation_split=0.1, callbacks=[tf.keras.callbacks.EarlyStopping(patience=5, restore_best_weights=True)])
-            meta["retrain_count"] = meta.get("retrain_count", 0) + 1
+        scaler_path = get_scaler_path(ticker)
+        if force_retrain or not scaler_path.exists():
+            scaler = MinMaxScaler()
+            scaler.fit(df[['Close']])
+            joblib.dump(scaler, scaler_path)
         else:
-            try:
-                model = tf.keras.models.load_model(str(get_model_path(ticker)))
-                recent = int(len(X)*0.3)
-                model.fit(X[-recent:], y[-recent:], epochs=LEARNING_CONFIG["fine_tune_epochs"], batch_size=32, verbose=0)
-            except:
+            scaler = joblib.load(scaler_path)
+
+        scaled = scaler.transform(df[['Close']])
+        X, y = [], []
+        lookback = LEARNING_CONFIG["lookback_window"]
+        for i in range(lookback, len(scaled)):
+            X.append(scaled[i-lookback:i])
+            y.append(scaled[i])
+        X, y = np.array(X), np.array(y)
+        if len(X) == 0: return None, None, None
+
+        with model_cache_lock:
+            model = None
+            if force_retrain or needs:
                 model = build_lstm_model()
-                model.fit(X, y, epochs=LEARNING_CONFIG["full_retrain_epochs"], batch_size=32, verbose=0)
+                model.fit(X, y, epochs=LEARNING_CONFIG["full_retrain_epochs"], batch_size=32, verbose=0,
+                          validation_split=0.1, callbacks=[tf.keras.callbacks.EarlyStopping(patience=5, restore_best_weights=True)])
+                meta["retrain_count"] = meta.get("retrain_count", 0) + 1
+            else:
+                try:
+                    model = tf.keras.models.load_model(str(get_model_path(ticker)))
+                    recent = int(len(X)*0.3)
+                    model.fit(X[-recent:], y[-recent:], epochs=LEARNING_CONFIG["fine_tune_epochs"], batch_size=32, verbose=0)
+                except:
+                    model = build_lstm_model()
+                    model.fit(X, y, epochs=LEARNING_CONFIG["full_retrain_epochs"], batch_size=32, verbose=0)
 
-        try: model.save(str(get_model_path(ticker)))
-        except: pass
+            try: model.save(str(get_model_path(ticker)))
+            except: pass
 
-        last = scaled[-lookback:].reshape(1, lookback, 1)
-        preds = []
-        for _ in range(days):
-            pred = model.predict(last, verbose=0)
-            preds.append(pred[0,0])
-            last = np.append(last[:,1:,:], pred.reshape(1,1,1), axis=1)
-        forecast = scaler.inverse_transform(np.array(preds).reshape(-1,1)).flatten()
+            last = scaled[-lookback:].reshape(1, lookback, 1)
+            preds = []
+            for _ in range(days):
+                pred = model.predict(last, verbose=0)
+                preds.append(pred[0,0])
+                last = np.append(last[:,1:,:], pred.reshape(1,1,1), axis=1)
+            forecast = scaler.inverse_transform(np.array(preds).reshape(-1,1)).flatten()
 
-        tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
-        record_prediction(ticker, forecast[0], tomorrow)
+            tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+            record_prediction(ticker, forecast[0], tomorrow)
 
-        dates = []
-        i = 1
-        while len(dates) < days:
-            d = datetime.now().date() + timedelta(days=i)
-            if d.weekday() < 5: dates.append(d)
-            i += 1
+            dates = []
+            i = 1
+            while len(dates) < days:
+                d = datetime.now().date() + timedelta(days=i)
+                if d.weekday() < 5: dates.append(d)
+                i += 1
 
-        meta.update({
-            "trained_date": datetime.now().isoformat(),
-            "training_samples": len(X),
-            "training_volatility": float(df['Close'].pct_change().std()),
-            "version": meta.get("version", 1) + 1,
-            "last_accuracy": acc_log.get("avg_error", 0)
-        })
-        save_metadata(ticker, meta)
-        tf.keras.backend.clear_session()
-        return forecast, dates, model
+            meta.update({
+                "trained_date": datetime.now().isoformat(),
+                "training_samples": len(X),
+                "training_volatility": float(df['Close'].pct_change().std()),
+                "version": meta.get("version", 1) + 1,
+                "last_accuracy": acc_log.get("avg_error", 0)
+            })
+            save_metadata(ticker, meta)
+            tf.keras.backend.clear_session()
+            return forecast, dates, model
+    
+    finally:
+        # Always release the lock
+        lock.release()
 
 # ================================
 # 6%+ DETECTOR
@@ -613,10 +649,7 @@ def detect_pre_move_6percent(ticker, name):
         except: pass
 
         if score >= 75:
-            if any(x in ticker.upper() for x in ["PLTR", "MSTR", "COIN", "HOOD", "GME", "AMC"]):
-                if score >= 95 and vol_spike_vs_baseline > 10:
-                    direction = "DOWN" if original_direction == "UP" else "UP"
-                    factors.append("TRAP→REVERSAL")
+            # Removed MSTR trap logic - trust the AI pattern miner
             confidence = min(99, 60 + score // 2 + (30 if 'AI→' in ''.join(factors) else 0))
             return {"asset": name, "direction": direction, "confidence": confidence, "factors": factors, "score": score}
         return None
@@ -869,6 +902,7 @@ def continuous_learning_daemon():
 def monitor_6percent_pre_move():
     """
     FIXED: Properly updates heartbeat during sleep and continues forever
+    NO MORE TRAINING - Only reads cached forecasts
     """
     update_heartbeat("monitoring")
     THREAD_START_TIMES["monitoring"] = datetime.now()
@@ -904,30 +938,45 @@ def monitor_6percent_pre_move():
                             key = f"{t}_{signal['direction']}"
                             
                             if key not in alerted:
-                                # Ultra-confidence check before sending
+                                # FIXED: Read cached forecast instead of retraining
                                 current_price = get_latest_price(t)
                                 if current_price:
-                                    forecast, _, _ = train_self_learning_model(t, days=1)
-                                    if forecast:
-                                        ultra_passed, ultra_reasons = ultra_confidence_shield(t, forecast, current_price)
-                                        
-                                        if ultra_passed:
-                                            text = (f"🔮 NUCLEAR PRE-MOVE DETECTED\n\n"
-                                                   f"{signal['asset']} → {signal['direction']}\n"
-                                                   f"Confidence: {signal['confidence']}%\n"
-                                                   f"Factors: {', '.join(signal['factors'])}\n\n"
-                                                   f"✅ ULTRA-CONFIDENCE: PASSED")
+                                    # Get tomorrow's date for cached forecast
+                                    tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+                                    forecast_path = get_prediction_path(t, tomorrow)
+                                    
+                                    # Read cached forecast (created by learning daemon)
+                                    if forecast_path.exists():
+                                        try:
+                                            pred_data = json.loads(forecast_path.read_text())
+                                            forecast = [pred_data.get("predicted_price")]
                                             
-                                            if send_telegram_alert(text):
-                                                alerted.add(key)
-                                                alerts_sent += 1
-                                                logger.info(f"🚨 ALERT SENT: {signal['asset']} → {signal['direction']}")
-                                        else:
-                                            logger.debug(f"Ultra-confidence failed for {t}: {ultra_reasons}")
+                                            if forecast and forecast[0]:
+                                                ultra_passed, ultra_reasons = ultra_confidence_shield(t, forecast, current_price)
+                                                
+                                                if ultra_passed:
+                                                    text = (f"🔮 NUCLEAR PRE-MOVE DETECTED\n\n"
+                                                           f"{signal['asset']} → {signal['direction']}\n"
+                                                           f"Confidence: {signal['confidence']}%\n"
+                                                           f"Factors: {', '.join(signal['factors'])}\n\n"
+                                                           f"✅ ULTRA-CONFIDENCE: PASSED")
+                                                    
+                                                    if send_telegram_alert(text):
+                                                        alerted.add(key)
+                                                        alerts_sent += 1
+                                                        logger.info(f"🚨 ALERT SENT: {signal['asset']} → {signal['direction']}")
+                                                else:
+                                                    logger.debug(f"Ultra-confidence failed for {t}: {ultra_reasons}")
+                                            else:
+                                                logger.debug(f"No valid forecast for {t}")
+                                        except Exception as e:
+                                            logger.warning(f"Failed to read forecast for {t}: {e}")
+                                    else:
+                                        logger.debug(f"No cached forecast for {t} (learning daemon hasn't trained yet)")
                     
                     except Exception as e:
                         log_error(ErrorSeverity.WARNING, "monitor_6percent_scan", e, 
-                                ticker=t, show_to_user=False)
+                                ticker=t, user_message=f"Error scanning {t}: {str(e)}", show_to_user=False)
             
             if alerts_sent > 0:
                 logger.info(f"✅ Monitoring: Scan #{scan_count} complete - {alerts_sent} alert(s) sent")
@@ -944,7 +993,7 @@ def monitor_6percent_pre_move():
         
         except Exception as e:
             log_error(ErrorSeverity.ERROR, "monitor_6percent_pre_move", e,
-                    user_message="Monitoring error - will retry", show_to_user=False)
+                    user_message=f"Monitoring error: {str(e)}", show_to_user=False)
             time.sleep(30)
             update_heartbeat("monitoring")
 
