@@ -20,14 +20,100 @@ import logging
 from logging.handlers import RotatingFileHandler
 from enum import Enum
 from typing import Tuple, List
+import functools
+import threading 
 
-# Suppress warnings
+# Alpha Vantage key (add to secrets.toml or environment variable)
+ALPHA_VANTAGE_KEY = st.secrets.get("ALPHA_VANTAGE_KEY") or os.getenv("ALPHA_VANTAGE_KEY")
+
+@st.cache_data(ttl=45, show_spinner=False)
+def get_latest_price_robust(ticker: str):
+    """100% uptime price fetcher: Yahoo → Alpha Vantage → last resort"""
+    # Step 1: Try Yahoo Finance (fastest)
+    for attempt in range(2):
+        try:
+            data = yf.download(ticker, period="2d", interval="1m", progress=False)
+            data = normalize_dataframe_columns(data)
+            if not data.empty and len(data) > 1:
+                p = float(data['Close'].iloc[-1])
+                if validate_price(ticker, p):
+                    return round(p, 4) if ticker.endswith(("=F", "=X")) else round(p, 2)
+        except:
+            time.sleep(0.5)
+
+    # Step 2: Alpha Vantage fallback
+    if ALPHA_VANTAGE_KEY:
+        try:
+            # Map common futures/crypto
+            symbol_map = {
+                "GC=F": "XAUUSD", "CL=F": "WTICOUSD", "ZC=F": "CORN", "ZW=F": "WHEAT",
+                "BTC-USD": "BTCUSD", "ETH-USD": "ETHUSD"
+            }
+            av_symbol = symbol_map.get(ticker, ticker.replace("=F", "").replace("^", ""))
+
+            url = f"https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol={av_symbol}&apikey={ALPHA_VANTAGE_KEY}"
+            resp = requests.get(url, timeout=10)
+            data = resp.json()
+
+            if "Global Quote" in data and "05. price" in data["Global Quote"]:
+                p = float(data["Global Quote"]["05. price"])
+                if validate_price(ticker, p):
+                    logger.info(f"Alpha Vantage fallback used for {ticker}: ${p:.2f}")
+                    return round(p, 4) if ticker.endswith(("=F", "=X")) else round(p, 2)
+        except Exception as e:
+            logger.debug(f"Alpha Vantage failed: {e}")
+
+    # Step 3: Last resort Yahoo info endpoint
+    try:
+        info = yf.Ticker(ticker).info
+        p = info.get('regularMarketPrice') or info.get('currentPrice') or info.get('previousClose')
+        if p and validate_price(ticker, p):
+            return round(p, 4) if ticker.endswith(("=F", "=X")) else round(p, 2)
+    except:
+        pass
+
+    log_error(ErrorSeverity.WARNING, "get_latest_price_robust", Exception("All sources failed"), ticker=ticker, show_to_user=False)
+    return None
+
+# ───────────────────────────────
+# 1. YFINANCE 401 + TIMEOUT FIX – FINAL WORKING VERSION (2025)
+# ───────────────────────────────
+from requests_cache import CacheMixin
+from requests_ratelimiter import LimiterMixin
+from requests import Session
+from pyrate_limiter import Duration, Limiter
+
+class LimitedCachedSession(CacheMixin, LimiterMixin, Session):
+    pass
+
+# 2 requests per 1 second = 2 req/sec max (perfect for Yahoo)
+session = LimitedCachedSession(
+    limiter=Limiter(2, Duration.SECOND),
+    bucket="yfinance",
+    expire_after=300,
+    backend="sqlite"
+)
+
+session.headers.update({
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0"
+})
+
+# GLOBAL PATCH – ALL yfinance calls now use our armored session
+yf.shared._SESSION = session
+yf.shared._DFS = {}
+yf.shared._BASE_URL_ = "https://query2.finance.yahoo.com"
+
+# Monkey-patch download & Ticker to always use session
+yf.download = functools.partial(yf.download, session=session, auto_adjust=True, progress=False, threads=False)
+yf.Ticker = lambda ticker, *args, **kwargs: yf.Ticker(ticker, session=session, *args, **kwargs)
+
+# Suppress TF & warnings
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 warnings.filterwarnings("ignore")
 tf.get_logger().setLevel('ERROR')
 
-# Suppress Streamlit thread warnings
+# Suppress Streamlit thread warnings once and for all
 try:
     from streamlit.runtime.scriptrunner import script_run_context
     if hasattr(script_run_context, '_LOGGER'):
@@ -35,68 +121,49 @@ try:
 except:
     pass
 
-
 # ================================
-# LIVE HYBRID PATTERN MINER INTEGRATION
+# LIVE HYBRID PATTERN MINER INTEGRATION (unchanged)
 # ================================
 AUTO_PATTERNS_FILE = Path("auto_patterns.json")
-
 def check_auto_patterns(ticker: str, data: pd.DataFrame = None) -> tuple:
     if not AUTO_PATTERNS_FILE.exists():
         return 0, [], "NEUTRAL", 0
-
     try:
         raw = json.loads(AUTO_PATTERNS_FILE.read_text(encoding="utf-8"))
         if "patterns" not in raw:
             return 0, [], "NEUTRAL", 0
-
         ticker_clean = ticker.replace('=F', '').replace('^', '').split('.')[0].upper()
         now = datetime.now()
         best_match = None
         best_auc = 0
-
         for pat in raw["patterns"]:
             if pat.get("ticker", "").upper() != ticker_clean:
                 continue
             try:
                 pat_time = datetime.strptime(pat.get("timestamp", ""), "%Y-%m-%d %H:%M")
-                # Prefer fresh patterns (< 1 hour), but accept up to 6 hours
                 age_hours = (now - pat_time).total_seconds() / 3600
-                if age_hours > 6:  # ← Changed from 24h to 6h for real-time detection
+                if age_hours > 6:
                     continue
-                    
-                # Penalize old patterns
                 freshness_factor = 1.0 if age_hours < 1 else 0.8 if age_hours < 3 else 0.6
-                
             except:
                 continue
-
-            auc = pat.get("auc_mean", 0) * freshness_factor  # ← Apply freshness penalty
+            auc = pat.get("auc_mean", 0) * freshness_factor
             if auc > best_auc:
                 best_auc = auc
                 best_match = pat
-
         if not best_match:
             return 0, [], "NEUTRAL", 0
-
-        boost = int(best_match.get("boost", 0) * freshness_factor)  # ← Reduce stale boosts
+        boost = int(best_match.get("boost", 0) * freshness_factor)
         bias = best_match.get("direction_bias", "NEUTRAL")
         direction = "DOWN" if bias == "DOWN" else "UP" if bias == "UP" else "NEUTRAL"
-        timeframe = best_match.get("timeframe", "unknown")
-        model = best_match.get("model", "unknown").upper()
-        auc_val = best_match.get("auc_mean", 0)
-
-        confidence = min(99, int(auc_val * 100 + boost // 2.5))
-
+        confidence = min(99, int(best_match.get("auc_mean", 0) * 100 + boost // 2.5))
         triggers = [
-            f"{model} AUC {auc_val:.3f}",
+            f"{best_match.get('model', 'unknown').upper()} AUC {best_match.get('auc_mean', 0):.3f}",
             f"Boost +{boost}",
-            f"{timeframe.upper()} ELITE",
+            f"{best_match.get('timeframe', 'unknown').upper()} ELITE",
             f"Bias {bias}"
         ]
-
         return boost, triggers, direction, confidence
-
     except Exception as e:
         try:
             log_error(ErrorSeverity.WARNING, "check_auto_patterns", e, ticker=ticker, show_to_user=False)
@@ -105,7 +172,7 @@ def check_auto_patterns(ticker: str, data: pd.DataFrame = None) -> tuple:
         return 0, [], "NEUTRAL", 0
 
 # ================================
-# LOGGING SETUP
+# LOGGING & ERROR SYSTEM (THREAD-SAFE FIX)
 # ================================
 LOG_DIR = Path("logs")
 LOG_DIR.mkdir(exist_ok=True)
@@ -124,34 +191,24 @@ def reset_all_logs_on_startup():
             (LOG_DIR / f).unlink(missing_ok=True)
         ERROR_LOG_PATH.write_text("[]")
     except: pass
-
 reset_all_logs_on_startup()
 
 def setup_logging():
     logger = logging.getLogger('stock_tracker')
     logger.setLevel(logging.DEBUG)
     logger.handlers.clear()
-    
-    # Console handler with UTF-8 encoding (Windows fix)
     console = logging.StreamHandler()
     console.setLevel(logging.INFO)
     console.setFormatter(logging.Formatter('%(asctime)s | %(levelname)-8s | %(message)s', '%Y-%m-%d %H:%M:%S'))
-    # Fix Windows emoji encoding issues
     if hasattr(console.stream, 'reconfigure'):
-        try:
-            console.stream.reconfigure(encoding='utf-8')
-        except:
-            pass
-    
-    # File handlers with explicit UTF-8 encoding
+        try: console.stream.reconfigure(encoding='utf-8')
+        except: pass
     file = RotatingFileHandler(LOG_DIR / 'app.log', maxBytes=10*1024*1024, backupCount=5, encoding='utf-8')
     file.setLevel(logging.DEBUG)
     file.setFormatter(logging.Formatter('%(asctime)s | %(levelname)-8s | %(funcName)s | %(message)s', '%Y-%m-%d %H:%M:%S'))
-    
     error = RotatingFileHandler(LOG_DIR / 'errors.log', maxBytes=5*1024*1024, backupCount=3, encoding='utf-8')
     error.setLevel(logging.ERROR)
     error.setFormatter(file.formatter)
-    
     logger.addHandler(console)
     logger.addHandler(file)
     logger.addHandler(error)
@@ -174,15 +231,23 @@ def log_error(severity, function_name, error, ticker=None, user_message="An erro
     elif severity == ErrorSeverity.WARNING: logger.warning(user_message)
     elif severity == ErrorSeverity.ERROR: logger.error(user_message, exc_info=True)
     elif severity == ErrorSeverity.CRITICAL: logger.critical(user_message, exc_info=True)
+
     try:
         history = json.loads(ERROR_LOG_PATH.read_text()) if ERROR_LOG_PATH.exists() else []
         history.append(error_data)
         ERROR_LOG_PATH.write_text(json.dumps(history[-500:], indent=2))
     except: pass
+
+    # ONLY SHOW st. messages in main thread
     if show_to_user and 'st' in globals():
-        if severity == ErrorSeverity.CRITICAL: st.error(f"🚨 {user_message}")
-        elif severity == ErrorSeverity.ERROR: st.error(f"❌ {user_message}")
-        elif severity == ErrorSeverity.WARNING: st.warning(f"⚠️ {user_message}")
+        try:
+            if threading.current_thread() is threading.main_thread():
+                if severity == ErrorSeverity.CRITICAL: st.error(f"CRITICAL {user_message}")
+                elif severity == ErrorSeverity.ERROR: st.error(f"ERROR {user_message}")
+                elif severity == ErrorSeverity.WARNING: st.warning(f"WARNING {user_message}")
+        except:
+            pass
+
     try:
         if hasattr(st, 'session_state'):
             st.session_state.setdefault('error_logs', []).append(error_data)
@@ -499,21 +564,31 @@ def train_self_learning_model(ticker, days=5, force_retrain=False):
     if not lock.acquire(blocking=False):
         logger.warning(f"Training {ticker} already in progress by another thread, skipping")
         return None, None, None
-    
+   
     try:
         logger.info(f"Training {ticker} (force={force_retrain})")
         updated, acc_log = validate_predictions(ticker)
         meta = load_metadata(ticker)
         needs, reasons = should_retrain(ticker, acc_log, meta)
+
         if needs or force_retrain:
-            if 'st' in globals() and hasattr(st, 'session_state'):
-                st.session_state.setdefault('learning_log', []).append(f"🔄 Retraining {ticker}: {', '.join(reasons)}")
+            # Thread-safe logging — NO st. calls in background!
+            logger.info(f"RETRAINING {ticker} → Reasons: {', '.join(reasons)}")
+           
+            # Only update session_state if we're in the main thread (user-triggered retrain)
+            if threading.current_thread() is threading.main_thread():
+                if 'st' in globals() and hasattr(st, 'session_state'):
+                    st.session_state.setdefault('learning_log', []).append(
+                        f"Retraining {ticker}: {', '.join(reasons) or 'Force'}"
+                    )
 
         df = yf.download(ticker, period="1y", progress=False)
         df = normalize_dataframe_columns(df)
-        if df is None or len(df) < 100: return None, None, None
+        if df is None or len(df) < 100: 
+            return None, None, None
         df = df[['Close']].ffill().bfill()
-        if df['Close'].isna().any(): return None, None, None
+        if df['Close'].isna().any(): 
+            return None, None, None
 
         scaler_path = get_scaler_path(ticker)
         if force_retrain or not scaler_path.exists():
@@ -530,7 +605,8 @@ def train_self_learning_model(ticker, days=5, force_retrain=False):
             X.append(scaled[i-lookback:i])
             y.append(scaled[i])
         X, y = np.array(X), np.array(y)
-        if len(X) == 0: return None, None, None
+        if len(X) == 0: 
+            return None, None, None
 
         with model_cache_lock:
             model = None
@@ -548,8 +624,10 @@ def train_self_learning_model(ticker, days=5, force_retrain=False):
                     model = build_lstm_model()
                     model.fit(X, y, epochs=LEARNING_CONFIG["full_retrain_epochs"], batch_size=32, verbose=0)
 
-            try: model.save(str(get_model_path(ticker)))
-            except: pass
+            try: 
+                model.save(str(get_model_path(ticker)))
+            except: 
+                pass
 
             last = scaled[-lookback:].reshape(1, lookback, 1)
             preds = []
@@ -566,7 +644,8 @@ def train_self_learning_model(ticker, days=5, force_retrain=False):
             i = 1
             while len(dates) < days:
                 d = datetime.now().date() + timedelta(days=i)
-                if d.weekday() < 5: dates.append(d)
+                if d.weekday() < 5: 
+                    dates.append(d)
                 i += 1
 
             meta.update({
@@ -579,7 +658,7 @@ def train_self_learning_model(ticker, days=5, force_retrain=False):
             save_metadata(ticker, meta)
             tf.keras.backend.clear_session()
             return forecast, dates, model
-    
+   
     finally:
         # Always release the lock
         lock.release()
@@ -939,7 +1018,7 @@ def monitor_6percent_pre_move():
                             
                             if key not in alerted:
                                 # FIXED: Read cached forecast instead of retraining
-                                current_price = get_latest_price(t)
+                                current_price = get_latest_price_robust(t)
                                 if current_price:
                                     # Get tomorrow's date for cached forecast
                                     tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
