@@ -228,19 +228,22 @@ def log_error(severity, function_name, error, ticker=None, user_message="An erro
         "error": str(error),
         "user_message": user_message
     }
+
+    # Log to file/console
     if severity == ErrorSeverity.DEBUG: logger.debug(user_message)
     elif severity == ErrorSeverity.INFO: logger.info(user_message)
     elif severity == ErrorSeverity.WARNING: logger.warning(user_message)
     elif severity == ErrorSeverity.ERROR: logger.error(user_message, exc_info=True)
     elif severity == ErrorSeverity.CRITICAL: logger.critical(user_message, exc_info=True)
 
+    # Save to JSON log
     try:
         history = json.loads(ERROR_LOG_PATH.read_text()) if ERROR_LOG_PATH.exists() else []
         history.append(error_data)
         ERROR_LOG_PATH.write_text(json.dumps(history[-500:], indent=2))
     except: pass
 
-    # ONLY SHOW st. messages in main thread
+    # ONLY show st. messages in the MAIN thread
     if show_to_user and 'st' in globals():
         try:
             if threading.current_thread() is threading.main_thread():
@@ -248,24 +251,13 @@ def log_error(severity, function_name, error, ticker=None, user_message="An erro
                 elif severity == ErrorSeverity.ERROR: st.error(f"ERROR {user_message}")
                 elif severity == ErrorSeverity.WARNING: st.warning(f"WARNING {user_message}")
         except:
-            pass
+            pass  # Silent fail in background threads
 
+    # Optional: store in session_state for diagnostics tab
     try:
         if hasattr(st, 'session_state'):
             st.session_state.setdefault('error_logs', []).append(error_data)
     except: pass
-
-def get_error_statistics():
-    try:
-        if not ERROR_LOG_PATH.exists(): return {"total": 0, "by_severity": {}, "recent": []}
-        errors = json.loads(ERROR_LOG_PATH.read_text())
-        by_sev = {}
-        for e in errors:
-            s = e.get('severity', 'UNKNOWN')
-            by_sev[s] = by_sev.get(s, 0) + 1
-        return {"total": len(errors), "by_severity": by_sev, "recent": errors[-10:]}
-    except: return {"total": 0, "by_severity": {}, "recent": []}
-
 # ================================
 # CONFIG & DIRECTORIES
 # ================================
